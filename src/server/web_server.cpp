@@ -84,7 +84,10 @@ void WebServerHandler::_handleApiState() {
 
     // Pending key (consumed — one-shot)
     if (gState.keyReady) {
-        doc["key"] = String(gState.consumeKey());
+        char k = gState.consumeKey();
+        doc["key"] = String(k);
+        Serial.printf("[POLL] Key delivered to browser: %c  Q-idx=%d\n",
+                      k, gState.currentIndex);
     } else {
         doc["key"] = "";
     }
@@ -92,12 +95,16 @@ void WebServerHandler::_handleApiState() {
     // Touch event (consumed — one-shot)
     if (gState.touchEvent) {
         TouchStage ts = gState.consumeTouch();
+        const char* tStr = "NONE";
         switch (ts) {
-            case TOUCH_REC_START:  doc["touch"] = "REC_START";  break;
-            case TOUCH_REC_STOP:   doc["touch"] = "REC_STOP";   break;
-            case TOUCH_CONFIRMED:  doc["touch"] = "CONFIRMED";  break;
-            default:               doc["touch"] = "NONE";       break;
+            case TOUCH_REC_START:  tStr = "REC_START";  break;
+            case TOUCH_REC_STOP:   tStr = "REC_STOP";   break;
+            case TOUCH_CONFIRMED:  tStr = "CONFIRMED";  break;
+            default:               tStr = "NONE";       break;
         }
+        doc["touch"] = tStr;
+        Serial.printf("[POLL] Touch delivered to browser: %s  Q-idx=%d\n",
+                      tStr, gState.currentIndex);
     } else {
         doc["touch"] = "NONE";
     }
@@ -120,6 +127,7 @@ void WebServerHandler::_handleApiState() {
     serializeJson(doc, out);
     _sendJson(out);
 }
+
 
 void WebServerHandler::_handleApiMode() {
     // Browser tells ESP what question type is active
@@ -147,10 +155,33 @@ void WebServerHandler::_handleApiStartTest() {
 }
 
 void WebServerHandler::_handleApiNextQuestion() {
-    // Browser calls this when advancing (after CONFIRMED touch)
-    gState.resetTimer();
-    gState.touchStage = TOUCH_NONE;   // reset voice touch stage
-    Serial.printf("[Q] Next → idx=%d\n", gState.currentIndex);
+    // ---- FIX: advance the ESP-side question index ----
+    // Previously this was never incremented, so:
+    //   1. OLED always showed Q1 regardless of actual question
+    //   2. interactions[0].selectedOption was never cleared,
+    //      so the touch sensor spuriously fired CONFIRMED from
+    //      the PREVIOUS question's stored selection.
+    gState.currentIndex++;
+
+    // Clear interaction record for the new index so that
+    // selectedOption / numericValue from the previous question
+    // cannot bleed into the new question's touch guard check.
+    if (gState.currentIndex >= 0 && gState.currentIndex < 50) {
+        gState.interactions[gState.currentIndex].selectedOption  = "";
+        gState.interactions[gState.currentIndex].numericValue    = "";
+        gState.interactions[gState.currentIndex].voiceRecorded   = false;
+        gState.interactions[gState.currentIndex].answered        = false;
+        gState.interactions[gState.currentIndex].startTimeMs     = millis();
+        gState.interactions[gState.currentIndex].firstInputTimeMs = 0;
+        gState.interactions[gState.currentIndex].submitTimeMs    = 0;
+    }
+
+    // Reset timer, numInput accumulator, and voice touch stage
+    gState.resetTimer();              // clears numInput + touchStage + timer
+    gState.touchStage = TOUCH_NONE;   // explicit clear (resetTimer already does this)
+
+    Serial.printf("[Q] Advanced → idx=%d / total=%d\n",
+                  gState.currentIndex, gState.totalQuestions);
     gOled.update();
     _sendOk();
 }

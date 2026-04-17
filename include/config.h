@@ -31,22 +31,22 @@
 
 // ---- Touch Sensor ----------------------------------------
 #define TOUCH_PIN       4
-#define TOUCH_THRESHOLD 40      // Below this = touched (capacitive)
-#define TOUCH_DEBOUNCE  600     // ms between valid touches
+#define TOUCH_THRESHOLD 1       // Digital mode: 1 = Touched, 0 = Idle
+#define TOUCH_DEBOUNCE  200     // Faster response
 
 // ---- 4x4 Keypad (HX543 layout) --------------------------
 #define KP_ROWS 4
 #define KP_COLS 4
-// Row GPIO pins (top to bottom)
-#define KP_R1 13
-#define KP_R2 12
-#define KP_R3 14
-#define KP_R4 27
-// Column GPIO pins (left to right)
-#define KP_C1 26
-#define KP_C2 25
-#define KP_C3 33
-#define KP_C4 32
+// Row GPIO pins - Reversed to fix A->D, B->C mapping
+#define KP_R1 32
+#define KP_R2 33
+#define KP_R3 25
+#define KP_R4 26
+// Column GPIO pins (Re-reversing to original working state)
+#define KP_C1 27
+#define KP_C2 14
+#define KP_C3 12
+#define KP_C4 13
 
 // ---- System Timing ---------------------------------------
 #define POLL_PERIOD_MS      1   // main loop small delay

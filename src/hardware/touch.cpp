@@ -8,15 +8,23 @@
 TouchHandler gTouch;
 
 void TouchHandler::begin() {
-    // No pinMode needed — touchRead() uses ADC internally
-    Serial.println("[TOUCH] OK  pin=" + String(TOUCH_PIN));
+    pinMode(TOUCH_PIN, INPUT);
+    Serial.println("[TOUCH] OK  pin=" + String(TOUCH_PIN) + " (DIGITAL MODE)");
 }
 
 void TouchHandler::update() {
-    int val = touchRead(TOUCH_PIN);
-    bool touched = (val < TOUCH_THRESHOLD);
+    // Using digitalRead instead of touchRead for reliability with TTP223 modules
+    int val = digitalRead(TOUCH_PIN);
+    bool touched = (val >= TOUCH_THRESHOLD); // TOUCH_THRESHOLD is 1
 
-    // Rising edge detection with debounce
+    // Continuous Debug Print (every 200ms for calibration)
+    static unsigned long lastLog = 0;
+    if (millis() - lastLog > 200) {
+        lastLog = millis();
+        Serial.printf("[TOUCH DEBUG] State: %d  Status: %s\n", 
+                      val, touched ? "TOUCHED!" : "Idle");
+    }
+
     if (touched && !_prevTouched) {
         unsigned long now = millis();
         if (now - _lastTouchMs >= TOUCH_DEBOUNCE) {
