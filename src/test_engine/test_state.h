@@ -135,13 +135,18 @@ public:
                 numInput = ""; 
                 clearInteraction(currentIndex);
             }
-        } else {
-            // Already at last question handled by submit trigger
+        } else if (currentIndex == totalQuestions - 1) {
+            // Move to the final "Ready to Submit" review screen
+            currentIndex = totalQuestions;
+            mode = MODE_READY; 
+            numInput = "";
+            Serial.println("[STATE] All questions answered. Entering final review state.");
         }
     }
 
     void prevQuestion() {
         if (mode == MODE_ROLL) return;
+        
         if (currentIndex > 0) {
             currentIndex--;
             applyModeForCurrentQuestion();
@@ -149,12 +154,10 @@ public:
             // Restore previous input
             if (mode == MODE_NUM) {
                 numInput = interactions[currentIndex].numericValue;
-            } else if (mode == MODE_MCQ || mode == MODE_VOICE) {
-                // MCQ pending is usually in selectedOption
+            } else {
                 numInput = ""; 
             }
         } else if (currentIndex == 0) {
-            // Go back to roll input?
             mode = MODE_ROLL;
             numInput = studentRoll;
             resetTimer();
@@ -179,6 +182,7 @@ public:
     }
 
     bool isActive() const {
+        if (mode == MODE_READY && currentIndex == totalQuestions) return true;
         return (mode == MODE_MCQ || mode == MODE_NUM || mode == MODE_VOICE || mode == MODE_ROLL);
     }
 

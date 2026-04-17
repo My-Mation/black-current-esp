@@ -119,8 +119,13 @@ void TouchHandler::_handleTouch() {
                 Serial.println("[TOUCH] VOICE → CONFIRMED");
                 break;
 
-            default:
-                break;
         }
+    }
+    else if (m == MODE_READY && gState.currentIndex == gState.totalQuestions) {
+        // Final Submission Trigger
+        gBuzzer.beepConfirm();
+        gState.submitTest();
+        gState.fireTouchEvent(TOUCH_CONFIRMED);
+        Serial.println("[TOUCH] Final Test submission triggered");
     }
 }

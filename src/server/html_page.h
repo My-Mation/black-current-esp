@@ -62,6 +62,14 @@ const char HTML_PART2[] PROGMEM = R"rawliteral(
   </div>
 </div>
 
+<!-- =========== ROLL INPUT CARD =========== -->
+<div class="card hidden fade" id="rollCard">
+  <div class="card-ttl">🆔 Student Registration</div>
+  <p class="prog-lbl">Enter your Roll Number to begin</p>
+  <div class="num-display empty" id="rollDisp">Use keypad 0–9</div>
+  <p class="hint">Press # to confirm and start test</p>
+</div>
+
 <!-- =========== QUESTION CARD =========== -->
 <div class="card hidden fade" id="qCard">
   <div class="qbox">
@@ -104,10 +112,11 @@ const char HTML_PART2[] PROGMEM = R"rawliteral(
 
 <!-- =========== REVIEW PROMPT =========== -->
 <div class="card hidden fade" id="reviewCard">
-  <div class="card-ttl">🏁 Test Finished</div>
-  <p style="margin-bottom:15px; color:var(--txt2);">You have reached the end of the test. You can now review your answers before final submission.</p>
+  <div class="card-ttl">🏁 All Questions Answered</div>
+  <p style="margin-bottom:15px; color:var(--txt2);">You can revisit questions by pressing the <strong>Star (*)</strong> button. <br><br>If you are finished, press the <strong>Test Starter</strong> (Hardware Button) to submit your results to the server.</p>
   <div class="row">
-    <button class="btn btn-p btn-blk" id="btnGoToReview">🔍 Review Answers (Press #)</button>
+    <button class="btn btn-p btn-blk" id="btnHWSubmit">📤 Submit Test (Hardware Button)</button>
+    <button class="btn btn-s btn-blk" id="btnGoBackReview">🔍 Review Previous (*) </button>
   </div>
 </div>
 

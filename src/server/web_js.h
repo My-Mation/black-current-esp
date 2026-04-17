@@ -35,16 +35,28 @@ let espSec      = 0;      // timer seconds from ESP
 //  INIT & EVENTS
 // ============================================================
 document.addEventListener('DOMContentLoaded', () => {
-  $('btnLoad').addEventListener('click', () => { show('loadCard'); });
-  $('btnCancelLoad').addEventListener('click', () => { hide('loadCard'); });
-  $('btnAuto').addEventListener('click', () => { runAutoGenerate(); });
-  $('btnParse').addEventListener('click', () => { parseJsonInput(); });
-  $('btnGoToReview').addEventListener('click', () => { startReview(); });
-  $('btnSubmit').addEventListener('click', () => { finalizeSubmission(); });
-  $('btnStart').addEventListener('click', async () => {
+  const btnLoad = $('btnLoad'), btnCancel = $('btnCancelLoad'), btnAuto = $('btnAuto');
+  const btnParse = $('btnParse'), btnSubmit = $('btnSubmit'), btnStart = $('btnStart');
+  
+  if(btnLoad) btnLoad.addEventListener('click', () => show('loadCard'));
+  if(btnCancel) btnCancel.addEventListener('click', () => hide('loadCard'));
+  if(btnAuto) btnAuto.addEventListener('click', runAutoGenerate);
+  if(btnParse) btnParse.addEventListener('click', parseJsonInput);
+  if(btnSubmit) btnSubmit.addEventListener('click', finalizeSubmission);
+  
+  // New review screen buttons
+  const btnHWS = $('btnHWSubmit'), btnGBR = $('btnGoBackReview');
+  if(btnHWS) btnHWS.addEventListener('click', finalizeSubmission);
+  if(btnGBR) btnGBR.addEventListener('click', prevQuestion);
+
+  if(btnStart) btnStart.addEventListener('click', async () => {
+    console.log("btnStart clicked. Active:", testActive, "Q-len:", questions.length);
     if(!testActive && questions.length > 0) {
+      console.log("Starting test sequence...");
       await requestMic();
       startActualTest();
+    } else {
+      console.warn("Cannot start test: active or no questions");
     }
   });
   startPoll();
@@ -70,20 +82,30 @@ async function requestMic() {
 // ============================================================
 //  POLLING — reads ESP state every POLL_MS ms
 // ============================================================
-function startPoll(){
-  if(pollId) clearInterval(pollId);
-  pollId = setInterval(doPoll, POLL_MS);
-}
-
+let isPolling = false;
 async function doPoll(){
+  if(isPolling) return;
+  isPolling = true;
   try{
     const r = await fetch('/api/state');
-    if(!r.ok) return;
+    if(!r.ok) { isPolling = false; return; }
     const d = await r.json();
     onESPState(d);
+    if(d.mode === 'DONE' && testActive) {
+       // stop polling after short delay to allow UI to settle
+       isPolling = false;
+       return; 
+    }
   } catch(e){}
+  isPolling = false;
+  setTimeout(doPoll, POLL_MS);
 }
 
+function startPoll(){
+  doPoll();
+}
+
+let lastMode = '';
 function onESPState(d){
   // HW heartbeat
   $('cHw').className = 'dot on';
@@ -98,11 +120,14 @@ function onESPState(d){
     renderTimer(espSec);
   }
 
-  // ---- Sync Index from ESP ----
-  if(testActive && d.index !== undefined && d.index !== curQ && d.index >= 0){
-    console.log("Syncing index from ESP:", d.index);
-    curQ = d.index;
-    renderQuestion();
+  // ---- Sync Index/Mode from ESP ----
+  if(testActive && d.index !== undefined && d.mode !== undefined){
+    if(d.index !== curQ || d.mode !== lastMode){
+       console.log("Syncing from ESP: Index", d.index, "Mode", d.mode);
+       curQ = d.index;
+       lastMode = d.mode;
+       renderQuestion(d.mode);
+    }
   }
 
   // ---- Sync Numeric Input from ESP ----
@@ -110,8 +135,13 @@ function onESPState(d){
     if(!answers[curQ]) answers[curQ] = {value:''};
     if(d.input !== undefined && d.input !== answers[curQ].value){
       answers[curQ].value = d.input;
-      renderNum();
+      renderNum(d.mode);
     }
+  }
+
+  // ---- Check for Test Completion ----
+  if(d.mode === 'DONE' && testActive){
+    showResults();
   }
 
   // ---- Key press event (mostly for MCQ and Voice confirmation) ----
@@ -137,7 +167,7 @@ function handleKey(key){
     }
   }
 
-  if(!testActive || curQ < 0) return;
+  if(!testActive || curQ < 0 || curQ >= questions.length) return;
   const q = questions[curQ];
 
   // Navigation and Numeric clearing are now ESP-driven and synced via poll.
@@ -160,7 +190,13 @@ function handleKey(key){
 //  TOUCH HANDLER  (from ESP poll — multi-stage)
 // ============================================================
 async function handleTouch(stage){
-  if(!testActive || curQ < 0) return;
+  if(!testActive || curQ < 0 || curQ >= questions.length) {
+     // If at end screen, touch confirmed means finalize
+     if(testActive && curQ === questions.length && stage === 'CONFIRMED'){
+        finalizeSubmission();
+     }
+     return;
+  }
   const q = questions[curQ];
   $('cTouch').className = 'dot on';
   $('lblTouch').textContent = 'Touch: ' + stage;
@@ -261,11 +297,10 @@ function renderTimer(sec){
 }
 
 function advanceQuestion(){
-  curQ++;
-  if(curQ >= questions.length){
-    endFinished();
-  } else {
-    renderQuestion();
+  if(curQ < questions.length){
+    curQ++;
+    const q = questions[curQ];
+    renderQuestion(q ? q.type : '');
     fetch('/api/next_question').catch(()=>{});
   }
 }
@@ -273,13 +308,33 @@ function advanceQuestion(){
 function prevQuestion(){
   if(curQ > 0){
     curQ--;
-    renderQuestion();
-    // No explicit API for prev_question yet, using index sync if needed
+    const q = questions[curQ];
+    renderQuestion(q ? q.type : '');
+    // Use the API to keep ESP index in sync if navigating backward
+    fetch('/api/mode?m=PREV').catch(()=>{}); 
   }
 }
 
-function renderQuestion(){
+function renderQuestion(mode){
+  if(mode === 'ROLL'){
+    hide('qCard');
+    hide('reviewCard');
+    hide('ctrlCard');
+    show('rollCard');
+    renderNum(mode);
+    return;
+  }
+  
+  if(curQ >= questions.length){
+    hide('qCard');
+    hide('rollCard');
+    show('reviewCard');
+    return;
+  }
+  
   const q = questions[curQ];
+  hide('reviewCard');
+  hide('rollCard');
   show('qCard');
   $('qCard').classList.add('fade');
 
@@ -347,11 +402,13 @@ function renderMCQSelect(idx){
   });
 }
 
-function renderNum(){
-  const d = $('numDisp');
+function renderNum(mode){
+  const isRoll = mode === 'ROLL';
+  const targetId = isRoll ? 'rollDisp' : 'numDisp';
+  const d = $(targetId);
   const val = answers[curQ]?.value || '';
   if(!val){
-    d.textContent = 'Use keypad 0–9';
+    d.textContent = isRoll ? 'Enter Roll #' : 'Use keypad 0–9';
     d.className = 'num-display empty';
   } else {
     d.textContent = val;
@@ -381,12 +438,13 @@ function showResults(){
 function startActualTest() {
   testActive = true;
   curQ = 0;
+  lastMode = '';
   answers = new Array(questions.length).fill(null).map(()=>({value:'',submitted:false}));
   timers  = new Array(questions.length).fill(0);
   voiceBlobs = new Array(questions.length).fill(null);
   show('btnSubmit');
   fetch('/api/start_test').catch(()=>{});
-  renderQuestion();
+  renderQuestion('ROLL');
   startPoll();
 }
 
@@ -394,8 +452,10 @@ function startActualTest() {
 function startReview(){
   testActive = true;
   curQ = 0;
+  lastMode = '';
   hide('reviewCard');
-  renderQuestion();
+  const q = questions[curQ];
+  renderQuestion(q ? q.type : '');
 }
 
 function finalizeSubmission(){

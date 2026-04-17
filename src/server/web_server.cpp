@@ -31,7 +31,6 @@ bool WebServerHandler::beginWiFi() {
     Serial.println("\n[WIFI] IP: " + WiFi.localIP().toString());
     return true;
 }
-............................
 
 // ===================== Server setup =====================
 
@@ -154,6 +153,7 @@ void WebServerHandler::_handleApiMode() {
         else if (m == "NUMERIC") gState.mode = MODE_NUM;
         else if (m == "VOICE") gState.mode = MODE_VOICE;
         else if (m == "DONE")  gState.mode = MODE_DONE;
+        else if (m == "PREV")  gState.prevQuestion();
         else               gState.mode = MODE_IDLE;
 
         gOled.update();
