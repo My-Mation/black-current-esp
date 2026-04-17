@@ -43,9 +43,12 @@ void WebServerHandler::beginServer() {
     _srv.on("/api/start_test",    HTTP_GET,  [this](){ _handleApiStartTest(); });
     _srv.on("/api/next_question", HTTP_GET,  [this](){ _handleApiNextQuestion(); });
     _srv.on("/api/sync_ans",      HTTP_GET,  [this](){ _handleApiSyncAns(); });
+    _srv.on("/api/reset_voice",   HTTP_GET,  [this](){ _handleApiResetVoice(); });
     _srv.on("/api/load_questions",HTTP_POST, [this](){ _handleApiLoadQuestions(); });
     _srv.on("/api/load_questions",HTTP_OPTIONS,[this](){ _handleCors(); });
     _srv.on("/api/submit",        HTTP_GET,  [this](){ _handleApiSubmit(); });
+    _srv.on("/api/upload_audio",  HTTP_POST, [this](){ _handleApiUploadAudio(); });
+    _srv.on("/api/upload_audio",  HTTP_OPTIONS,[this](){ _handleCors(); });
     _srv.onNotFound([this](){ _handleNotFound(); });
 
     _srv.begin();
@@ -221,6 +224,20 @@ void WebServerHandler::_handleApiSyncAns() {
         gState.interactions[gState.currentIndex].selectedOption = val;
         Serial.println("[SYNC] Answer for Q" + String(gState.currentIndex + 1) + " set to " + val);
     }
+    _sendOk();
+}
+
+void WebServerHandler::_handleApiUploadAudio() {
+    // This is a placeholder for the audio upload endpoint.
+    // In a real implementation, you might save this to an SD card or stream it.
+    // Since ESP32 has limited RAM, we just acknowledge receipt for now.
+    Serial.println("[SERVER] Audio upload received (placeholder)");
+    _sendOk();
+}
+
+void WebServerHandler::_handleApiResetVoice() {
+    gState.touchStage = TOUCH_NONE;
+    Serial.println("[SERVER] Voice touch stage reset");
     _sendOk();
 }
 

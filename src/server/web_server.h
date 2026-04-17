@@ -27,6 +27,8 @@ private:
     void _handleApiLoadQuestions();
     void _handleApiSubmit();
     void _handleApiSyncAns();
+    void _handleApiResetVoice();
+    void _handleApiUploadAudio();
     void _handleCors();
     void _handleNotFound();
 

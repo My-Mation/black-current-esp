@@ -96,16 +96,27 @@ const char HTML_PART2[] PROGMEM = R"rawliteral(
   <div id="voiceArea" class="hidden">
     <div class="v-area">
       <div class="v-ring idle" id="vRing">🎤</div>
-      <p class="v-status" id="vStatus">Touch sensor to start recording</p>
-      <div id="voicePlayback" class="hidden" style="margin-top:10px;">
-        <p class="prog-lbl">Review your recording:</p>
-        <audio id="voicePreview" controls></audio>
+      <p class="v-status" id="vStatus">Press <b>1</b> to start recording</p>
+      
+      <!-- WhatsApp Style Playback -->
+      <div id="voicePlayback" class="hidden" style="margin-top:15px;">
+        <div class="wa-audio">
+          <div class="wa-play" id="waPlayBtn" onclick="toggleLocalPlayback()">▶</div>
+          <div class="wa-info">
+            <div class="wa-title"><span>Voice Recording</span> <span id="waTime">0:00</span></div>
+            <div class="wa-prog"><div class="wa-fill" id="waFill"></div></div>
+            <div class="wa-dur">Press <b>0</b>=Play · <b>D</b>=Delete · <b>#</b>=Confirm</div>
+          </div>
+        </div>
+        <audio id="voicePreview" class="hidden"></audio>
       </div>
+
       <div class="v-stage">
-        <div class="vstep active" id="vs1">1 · Start rec</div>
-        <div class="vstep" id="vs2">2 · Stop rec</div>
-        <div class="vstep" id="vs3">3 · Confirm</div>
+        <div class="vstep active" id="vs1">1 · Rec (1)</div>
+        <div class="vstep" id="vs2">2 · Stop (2)</div>
+        <div class="vstep" id="vs3">3 · Done (#)</div>
       </div>
+      <p class="hint" id="vHint" style="margin-top:15px">Keypad: 1=Start · 2=Stop · D=Delete · #=Submit</p>
     </div>
   </div>
 </div>
@@ -127,6 +138,7 @@ const char HTML_PART2[] PROGMEM = R"rawliteral(
     <div class="score-big" id="scoreBig">0/0</div>
     <div class="score-lbl">Questions Answered Correctly</div>
   </div>
+  <div id="uploadStatus" class="prog-lbl" style="margin-top:10px; text-align:center; color:var(--p1); font-weight:bold;"></div>
   <div id="resBody"></div>
 </div>
 

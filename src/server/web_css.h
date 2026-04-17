@@ -156,6 +156,19 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
 .res-ans strong{color:var(--txt);}
 audio{width:100%;margin-top:8px;border-radius:8px;}
 
+/* ===================== WHATSAPP AUDIO STYLE ===================== */
+.wa-audio{background:var(--s2);border:1px solid var(--bdr2);border-radius:24px;
+  padding:10px 15px;display:flex;align-items:center;gap:12px;margin:12px auto;
+  box-shadow:0 3px 10px rgba(0,0,0,0.15);max-width:320px;transition:all .3s;}
+.wa-play{width:36px;height:36px;border-radius:50%;background:var(--acc);color:white;
+  display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:1.1em;flex-shrink:0;}
+.wa-play:hover{background:var(--acc2);transform:scale(1.05);}
+.wa-info{flex:1;text-align:left;overflow:hidden;}
+.wa-title{font-size:.82em;font-weight:600;color:var(--txt);margin-bottom:2px;display:flex;justify-content:space-between;}
+.wa-prog{height:3px;background:var(--s3);border-radius:2px;position:relative;margin:4px 0;}
+.wa-fill{height:100%;background:var(--acc2);border-radius:2px;width:0%;transition:width .1s linear;}
+.wa-dur{font-size:.7em;color:var(--txt3);margin-top:2px;}
+
 /* ===================== ANIM ===================== */
 .fade{animation:fa .35s ease;}
 @keyframes fa{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}

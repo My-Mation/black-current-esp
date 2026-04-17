@@ -89,37 +89,12 @@ void TouchHandler::_handleTouch() {
     }
 
     // -------------------------------------------------------
-    //  VOICE: three-stage flow
-    //    Stage NONE       → fire REC_START
-    //    Stage REC_START  → fire REC_STOP
-    //    Stage REC_STOP   → fire CONFIRMED (move on)
+    //  VOICE: touch sensor = confirm recording (submission)
     // -------------------------------------------------------
     else if (m == MODE_VOICE) {
-        switch (gState.touchStage) {
-            case TOUCH_NONE:
-                gState.touchStage = TOUCH_REC_START;
-                gState.fireTouchEvent(TOUCH_REC_START);
-                gState.recordFirstInput();
-                Serial.println("[TOUCH] VOICE → REC_START");
-                break;
-
-            case TOUCH_REC_START:
-                gState.touchStage = TOUCH_REC_STOP;
-                gState.fireTouchEvent(TOUCH_REC_STOP);
-                gState.interactions[gState.currentIndex].voiceRecorded = true;
-                gBuzzer.beepConfirm();
-                Serial.println("[TOUCH] VOICE → REC_STOP");
-                break;
-
-            case TOUCH_REC_STOP:
-                gState.touchStage = TOUCH_CONFIRMED;
-                gState.submitCurrent();
-                gState.fireTouchEvent(TOUCH_CONFIRMED);
-                gBuzzer.beepConfirm();
-                Serial.println("[TOUCH] VOICE → CONFIRMED");
-                break;
-
-        }
+        gBuzzer.beepConfirm();
+        gState.fireTouchEvent(TOUCH_CONFIRMED);
+        Serial.println("[TOUCH] VOICE confirm triggered");
     }
     else if (m == MODE_READY && gState.currentIndex == gState.totalQuestions) {
         // Final Submission Trigger
