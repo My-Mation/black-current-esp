@@ -1,0 +1,16 @@
+{
+	"folders": [
+		{
+			"path": "../../../MyProjects/esp_core"
+		},
+		{
+			"name": "esp_core",
+			"path": "../esp_core"
+		},
+		{
+			"name": "black-current-esp",
+			"path": "."
+		}
+	],
+	"settings": {}
+}
