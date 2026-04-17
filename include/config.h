@@ -1,49 +1,54 @@
-#ifndef CONFIG_H
-#define CONFIG_H
+#pragma once
+// =============================================================
+//  config.h — Hardware pin definitions and system constants
+//  All hardware-specific values live here for easy modification
+// =============================================================
 
-// ============== WiFi Configuration ==============
-#define WIFI_SSID "OPPO K13x 5G s3cc"
-#define WIFI_PASS ""  // Open network, no password
+// ---- WiFi ------------------------------------------------
+#define WIFI_SSID   "OPPO K13x 5G s3cc"
+#define WIFI_PASS   ""          // Open network
 
-// ============== Pin Definitions ==============
+// ---- Web Server ------------------------------------------
+#define WEB_PORT    80
 
-// OLED Display (I2C)
-#define OLED_SDA 21
-#define OLED_SCL 22
-#define OLED_WIDTH 128
+// ---- OLED (I2C SSD1306) ----------------------------------
+#define OLED_SDA    21
+#define OLED_SCL    22
+#define OLED_WIDTH  128
 #define OLED_HEIGHT 64
-#define OLED_ADDR 0x3C
+#define OLED_ADDR   0x3C
 
-// TM1637 7-Segment Display
-#define TM1637_CLK 18
-#define TM1637_DIO 19
+// ---- TM1637 7-Segment ------------------------------------
+#define TM_CLK      18
+#define TM_DIO      19
 
-// Buzzer
-#define BUZZER_PIN 5
+// ---- Buzzer ----------------------------------------------
+#define BUZZER_PIN      5
+#define BUZZER_FREQ     2000    // Hz
+#define BUZZ_KEY_MS     50      // keypress beep duration
+#define BUZZ_CONFIRM_MS 200     // confirm/submit beep duration
+#define BUZZ_BOOT_MS    100     // boot sequence beep
 
-// Touch Sensor
-#define TOUCH_PIN 4
-#define TOUCH_THRESHOLD 40  // Capacitive touch threshold
+// ---- Touch Sensor ----------------------------------------
+#define TOUCH_PIN       4
+#define TOUCH_THRESHOLD 40      // Below this = touched (capacitive)
+#define TOUCH_DEBOUNCE  600     // ms between valid touches
 
-// 4x4 Keypad (HX543)
-#define KP_ROW1 13
-#define KP_ROW2 12
-#define KP_ROW3 14
-#define KP_ROW4 27
-#define KP_COL1 26
-#define KP_COL2 25
-#define KP_COL3 33
-#define KP_COL4 32
+// ---- 4x4 Keypad (HX543 layout) --------------------------
+#define KP_ROWS 4
+#define KP_COLS 4
+// Row GPIO pins (top to bottom)
+#define KP_R1 13
+#define KP_R2 12
+#define KP_R3 14
+#define KP_R4 27
+// Column GPIO pins (left to right)
+#define KP_C1 26
+#define KP_C2 25
+#define KP_C3 33
+#define KP_C4 32
 
-// ============== Timing ==============
-#define DEBOUNCE_MS 200
-#define TIMER_UPDATE_MS 1000
-#define TOUCH_DEBOUNCE_MS 500
-#define BUZZER_BEEP_MS 50
-#define BUZZER_SUBMIT_MS 200
-#define BUZZER_FREQ 2000
-
-// ============== Web Server ==============
-#define WEB_PORT 80
-
-#endif // CONFIG_H
+// ---- System Timing ---------------------------------------
+#define POLL_PERIOD_MS      1   // main loop small delay
+#define TIMER_TICK_MS       1000
+#define WIFI_TIMEOUT_TRIES  60  // x500ms = 30s
