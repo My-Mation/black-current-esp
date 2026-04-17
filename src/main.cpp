@@ -33,12 +33,14 @@
 // Shared state
 #include "test_engine/test_state.h"
 
+
+
 // ============================================================
 void setup() {
     Serial.begin(115200);
-    delay(200);
+    delay(500);
     Serial.println("\n========================================");
-    Serial.println("   ESP32 Test Station  v2.0");
+    Serial.println("   ESP32 Test Station v2.0");
     Serial.println("========================================");
 
     // 1. Buzzer first — gives audio boot feedback
@@ -48,28 +50,26 @@ void setup() {
     gOled.begin();
     gOled.showBoot();
     delay(400);
-
     // 3. TM1637 timer display
     gTm.begin();
 
-    // 4. Keypad — pure polling, no init needed beyond setup()
+    // 4. Keypad 
     gKeypad.begin();
 
-    // 5. Touch sensor — capacitive, no IO init
+    // 5. Touch sensor 
     gTouch.begin();
 
     // 6. WiFi — blocks until connected or restarts
     gOled.showConnecting(WIFI_SSID);
-    gWebServer.beginWiFi();
-
-    // 7. Web server — register routes
-    gWebServer.beginServer();
-
-    // 8. Show IP on OLED
-    gOled.showReady(gWebServer.getIP());
-
-    // Boot complete — double beep
-    gBuzzer.beepBoot();
+    if (gWebServer.beginWiFi()) {
+        gWebServer.beginServer();
+        // 7. Final UI feedback
+        gOled.showReady(gWebServer.getIP());
+        gBuzzer.beepBoot();
+        Serial.println("[SYSTEM] Active. IP: " + gWebServer.getIP());
+    } else {
+        gOled.showStatus("WiFi Init Failed", "Check SSID/Pass");
+    }
 
     Serial.println("Open browser: http://" + gWebServer.getIP());
     Serial.println("========================================\n");
@@ -77,21 +77,21 @@ void setup() {
 
 // ============================================================
 void loop() {
-    // Update timer in shared state
+    // Shared state updates
     gState.updateTimer();
 
-    // Poll hardware inputs
+    // Input polling
     gKeypad.update();
     gTouch.update();
 
-    // Sync display to state changes
+    // Visual updates
     gTm.update();
     gOled.update();
 
-    // Handle web requests
+    // Network handling
     gWebServer.update();
 
-    // Non-blocking buzzer
+    // Audio handling
     gBuzzer.update();
 
     delay(POLL_PERIOD_MS);

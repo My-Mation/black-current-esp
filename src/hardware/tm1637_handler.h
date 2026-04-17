@@ -14,7 +14,6 @@ public:
     void showDashes();   // Idle / not timing
     void showDone();     // "donE" when test finishes
     void update();       // Called from loop, syncs with gState
-
 private:
     TM1637Display _dsp{TM_CLK, TM_DIO};
     unsigned int  _lastSec = 9999;  // force first draw

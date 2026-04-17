@@ -13,8 +13,9 @@ enum QuestionType { Q_MCQ, Q_NUMERIC, Q_VOICE, Q_UNKNOWN };
 
 // ---- System mode (maps to OLED display) ------------------
 enum SystemMode {
-    MODE_IDLE,    // No test loaded
-    MODE_READY,   // Questions loaded, waiting to start
+    MODE_IDLE,    // Switch OFF
+    MODE_READY,   // Switch ON, waiting for test
+    MODE_ROLL,    // Roll number input
     MODE_MCQ,     // Active MCQ question
     MODE_NUM,     // Active numeric question
     MODE_VOICE,   // Active voice question
@@ -54,6 +55,9 @@ public:
     SystemMode  mode      = MODE_IDLE;
     TouchStage  touchStage = TOUCH_NONE;
 
+    // ---- Student Info -------------------------------------
+    String      studentRoll = "";
+
     // ---- Key & touch events (consumed by browser poll) ----
     char        pendingKey   = 0;
     bool        keyReady     = false;
@@ -74,41 +78,135 @@ public:
 
     // ---- Methods ------------------------------------------
 
-    void startTest() {
-        currentIndex = 0;
-        applyModeForCurrentQuestion();
-        resetTimer();
-        clearInteraction(0);
+    void setReady() {
+        mode = MODE_READY;
+        currentIndex = -1;
+        studentRoll = "";
+        timerRunning = false;
     }
 
-    void nextQuestion() {
-        currentIndex++;
-        if (currentIndex >= totalQuestions) {
-            mode = MODE_DONE;
-            timerRunning = false;
-        } else {
+    void resetToIdle() {
+        mode = MODE_IDLE;
+        currentIndex = -1;
+        totalQuestions = 0;
+        studentRoll = "";
+        numInput = "";
+        timerRunning = false;
+        for (int i=0; i<50; i++) clearInteraction(i);
+    }
+
+    void startTest() {
+        // First "question" is roll input
+        mode = MODE_ROLL;
+        currentIndex = 0;
+        numInput = "";
+        resetTimer();
+        clearInteraction(0);
+        Serial.println("[STATE] Starting Roll Input Phase");
+    }
+
+    void startActualQuestions() {
+        currentIndex = 0;
+        if (totalQuestions > 0) {
             applyModeForCurrentQuestion();
             resetTimer();
-            clearInteraction(currentIndex);
+        } else {
+            mode = MODE_DONE;
         }
     }
 
+    void nextQuestion() {
+        if (mode == MODE_ROLL) {
+            studentRoll = numInput;
+            Serial.println("[STATE] Roll confirmed: " + studentRoll);
+            startActualQuestions();
+            return;
+        }
+
+        if (currentIndex < totalQuestions - 1) {
+            currentIndex++;
+            applyModeForCurrentQuestion();
+            resetTimer();
+            // Restore answer if exists, otherwise clear
+            if (interactions[currentIndex].answered) {
+                if (mode == MODE_NUM) numInput = interactions[currentIndex].numericValue;
+                else numInput = ""; 
+            } else {
+                numInput = ""; 
+                clearInteraction(currentIndex);
+            }
+        } else {
+            // Already at last question handled by submit trigger
+        }
+    }
+
+    void prevQuestion() {
+        if (mode == MODE_ROLL) return;
+        if (currentIndex > 0) {
+            currentIndex--;
+            applyModeForCurrentQuestion();
+            resetTimer();
+            // Restore previous input
+            if (mode == MODE_NUM) {
+                numInput = interactions[currentIndex].numericValue;
+            } else if (mode == MODE_MCQ || mode == MODE_VOICE) {
+                // MCQ pending is usually in selectedOption
+                numInput = ""; 
+            }
+        } else if (currentIndex == 0) {
+            // Go back to roll input?
+            mode = MODE_ROLL;
+            numInput = studentRoll;
+            resetTimer();
+        }
+    }
+
+    void backspace() {
+        if (numInput.length() > 0) {
+            numInput.remove(numInput.length() - 1);
+            if (isActive()) {
+                if (mode == MODE_NUM) {
+                    interactions[currentIndex].numericValue = numInput;
+                }
+            }
+        }
+    }
+
+    void submitTest() {
+        mode = MODE_DONE;
+        timerRunning = false;
+        Serial.println("[STATE] Test Submitted and Completed");
+    }
+
     bool isActive() const {
-        return currentIndex >= 0 && currentIndex < totalQuestions;
+        return (mode == MODE_MCQ || mode == MODE_NUM || mode == MODE_VOICE || mode == MODE_ROLL);
     }
 
     bool isDone() const { return mode == MODE_DONE; }
 
     void recordFirstInput() {
-        if (isActive() && interactions[currentIndex].firstInputTimeMs == 0) {
-            interactions[currentIndex].firstInputTimeMs = millis();
+        if (isActive() && currentIndex >= 0 && currentIndex < 50) {
+            if (interactions[currentIndex].firstInputTimeMs == 0) {
+                interactions[currentIndex].firstInputTimeMs = millis();
+            }
         }
     }
 
     void submitCurrent() {
+        if (mode == MODE_ROLL) {
+            nextQuestion();
+            return;
+        }
         if (!isActive()) return;
         interactions[currentIndex].submitTimeMs = millis();
         interactions[currentIndex].answered = true;
+        
+        // Auto-advance if not the last question
+        if (currentIndex < totalQuestions - 1) {
+            nextQuestion();
+        } else {
+            Serial.println("[STATE] Last question confirmed. Waiting for Submit Trigger (0)");
+        }
     }
 
     void resetTimer() {
@@ -116,7 +214,10 @@ public:
         timerRunning  = true;
         elapsedSec    = 0;
         touchStage    = TOUCH_NONE;
-        numInput      = "";
+        if (mode != MODE_ROLL) {
+             // In NUM mode, we might restore answer, so don't always clear numInput here
+             // It's handled in next/prev methods
+        }
     }
 
     void updateTimer() {

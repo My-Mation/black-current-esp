@@ -26,6 +26,7 @@ private:
     void _handleApiNextQuestion();
     void _handleApiLoadQuestions();
     void _handleApiSubmit();
+    void _handleApiSyncAns();
     void _handleCors();
     void _handleNotFound();
 

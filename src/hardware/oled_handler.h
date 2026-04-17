@@ -25,6 +25,7 @@ private:
     Adafruit_SSD1306 _dsp;
     SystemMode       _lastMode    = MODE_IDLE;
     int              _lastIndex   = -1;
+    String           _lastNumInput = "";
     
     void _clear();
     void _border();

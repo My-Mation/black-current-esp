@@ -51,7 +51,17 @@ void TouchHandler::_handleTouch() {
     if (m == MODE_MCQ) {
         String sel = gState.interactions[gState.currentIndex].selectedOption;
         if (sel.length() == 0) {
-            // No option chosen yet — flash but don't advance
+            // Adaptive logic: if we have numeric input instead of an MCQ option,
+            // process it as a numeric confirmation to avoid getting stuck.
+            if (gState.numInput.length() > 0) {
+                Serial.printf("[TOUCH] Adaptive: Confirming NUM (%s) in MCQ mode\n", gState.numInput.c_str());
+                gBuzzer.beepConfirm();
+                gState.interactions[gState.currentIndex].numericValue = gState.numInput;
+                gState.submitCurrent();
+                gState.fireTouchEvent(TOUCH_CONFIRMED);
+                return;
+            }
+            // Truly no option chosen — flash but don't advance
             Serial.println("[TOUCH] MCQ – no option selected yet");
             gBuzzer.beepConfirm();
             return;

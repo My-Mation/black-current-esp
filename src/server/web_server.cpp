@@ -31,6 +31,7 @@ bool WebServerHandler::beginWiFi() {
     Serial.println("\n[WIFI] IP: " + WiFi.localIP().toString());
     return true;
 }
+............................
 
 // ===================== Server setup =====================
 
@@ -42,6 +43,7 @@ void WebServerHandler::beginServer() {
     _srv.on("/api/mode",          HTTP_GET,  [this](){ _handleApiMode(); });
     _srv.on("/api/start_test",    HTTP_GET,  [this](){ _handleApiStartTest(); });
     _srv.on("/api/next_question", HTTP_GET,  [this](){ _handleApiNextQuestion(); });
+    _srv.on("/api/sync_ans",      HTTP_GET,  [this](){ _handleApiSyncAns(); });
     _srv.on("/api/load_questions",HTTP_POST, [this](){ _handleApiLoadQuestions(); });
     _srv.on("/api/load_questions",HTTP_OPTIONS,[this](){ _handleCors(); });
     _srv.on("/api/submit",        HTTP_GET,  [this](){ _handleApiSubmit(); });
@@ -75,7 +77,16 @@ void WebServerHandler::_handleRoot() {
     _srv.sendHeader("Content-Security-Policy",
         "default-src 'self' 'unsafe-inline' https://fonts.googleapis.com "
         "https://fonts.gstatic.com; media-src 'self' mediastream: blob:;");
-    _srv.send_P(200, "text/html", INDEX_HTML);
+    
+    // Send in chunks to save RAM and handle large split files
+    _srv.setContentLength(CONTENT_LENGTH_UNKNOWN);
+    _srv.send(200, "text/html", "");
+    _srv.sendContent_P(HTML_PART1);
+    _srv.sendContent_P(WEB_CSS);
+    _srv.sendContent_P(HTML_PART2);
+    _srv.sendContent_P(WEB_JS);
+    _srv.sendContent_P(HTML_PART3);
+    _srv.sendContent(""); // Final empty chunk to signal end
 }
 
 void WebServerHandler::_handleApiState() {
@@ -114,6 +125,7 @@ void WebServerHandler::_handleApiState() {
 
     const char* modeStr = "IDLE";
     switch (gState.mode) {
+        case MODE_ROLL:  modeStr = "ROLL";  break;
         case MODE_MCQ:   modeStr = "MCQ";   break;
         case MODE_NUM:   modeStr = "NUM";   break;
         case MODE_VOICE: modeStr = "VOICE"; break;
@@ -122,6 +134,9 @@ void WebServerHandler::_handleApiState() {
         default:         modeStr = "IDLE";  break;
     }
     doc["mode"] = modeStr;
+    doc["roll"] = gState.studentRoll;
+    doc["index"] = gState.currentIndex;
+    doc["input"] = gState.numInput;
 
     String out;
     serializeJson(doc, out);
@@ -155,32 +170,8 @@ void WebServerHandler::_handleApiStartTest() {
 }
 
 void WebServerHandler::_handleApiNextQuestion() {
-    // ---- FIX: advance the ESP-side question index ----
-    // Previously this was never incremented, so:
-    //   1. OLED always showed Q1 regardless of actual question
-    //   2. interactions[0].selectedOption was never cleared,
-    //      so the touch sensor spuriously fired CONFIRMED from
-    //      the PREVIOUS question's stored selection.
-    gState.currentIndex++;
-
-    // Clear interaction record for the new index so that
-    // selectedOption / numericValue from the previous question
-    // cannot bleed into the new question's touch guard check.
-    if (gState.currentIndex >= 0 && gState.currentIndex < 50) {
-        gState.interactions[gState.currentIndex].selectedOption  = "";
-        gState.interactions[gState.currentIndex].numericValue    = "";
-        gState.interactions[gState.currentIndex].voiceRecorded   = false;
-        gState.interactions[gState.currentIndex].answered        = false;
-        gState.interactions[gState.currentIndex].startTimeMs     = millis();
-        gState.interactions[gState.currentIndex].firstInputTimeMs = 0;
-        gState.interactions[gState.currentIndex].submitTimeMs    = 0;
-    }
-
-    // Reset timer, numInput accumulator, and voice touch stage
-    gState.resetTimer();              // clears numInput + touchStage + timer
-    gState.touchStage = TOUCH_NONE;   // explicit clear (resetTimer already does this)
-
-    Serial.printf("[Q] Advanced → idx=%d / total=%d\n",
+    gState.nextQuestion();
+    Serial.printf("[SERVER] Advanced via API → idx=%d / total=%d\n",
                   gState.currentIndex, gState.totalQuestions);
     gOled.update();
     _sendOk();
@@ -221,6 +212,15 @@ void WebServerHandler::_handleApiSubmit() {
     gState.timerRunning = false;
     gOled.showDone(0, gState.totalQuestions);  // score computed browser-side
     Serial.println("[SUBMIT] Test submitted");
+    _sendOk();
+}
+
+void WebServerHandler::_handleApiSyncAns() {
+    if (_srv.hasArg("val") && gState.currentIndex >= 0) {
+        String val = _srv.arg("val");
+        gState.interactions[gState.currentIndex].selectedOption = val;
+        Serial.println("[SYNC] Answer for Q" + String(gState.currentIndex + 1) + " set to " + val);
+    }
     _sendOk();
 }
 

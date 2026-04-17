@@ -85,16 +85,19 @@ void OledHandler::showReady(const String& ip) {
 }
 
 void OledHandler::showMode(SystemMode mode, int qIndex, int total) {
-    // Skip redraw if nothing changed
-    if (mode == _lastMode && qIndex == _lastIndex) return;
+    // Skip redraw if nothing changed (including the input buffer for live feedback)
+    if (mode == _lastMode && qIndex == _lastIndex && gState.numInput == _lastNumInput) return;
     _lastMode  = mode;
     _lastIndex = qIndex;
+    _lastNumInput = gState.numInput;
 
     _clear();
     _border();
 
     // Top: question counter
-    if (total > 0) {
+    if (mode == MODE_ROLL) {
+        _title("STUDENT IDENTITY");
+    } else if (total > 0 && qIndex >= 0) {
         char buf[16];
         snprintf(buf, sizeof(buf), "Q%d / %d", qIndex + 1, total);
         _title(buf);
@@ -102,16 +105,42 @@ void OledHandler::showMode(SystemMode mode, int qIndex, int total) {
         _title("TEST STATION");
     }
 
-    // Middle: big mode label
+    // Middle: big mode label or current numeric input
     const char* label = "IDLE";
     const char* sub   = "";
+    bool showBuffer = false;
+
     switch (mode) {
-        case MODE_MCQ:   label = "MCQ";   sub = "Press A-D then Touch";  break;
-        case MODE_NUM:   label = "NUM";   sub = "Keys 0-9  Touch=Send";  break;
-        case MODE_VOICE: label = "VOICE"; sub = "Touch: Start/Stop/OK";  break;
-        case MODE_DONE:  label = "DONE";  sub = "Submit in browser";     break;
-        case MODE_READY: label = "READY"; sub = "Click Test Starter";    break;
-        default:         label = "IDLE";  sub = "Load questions first";  break;
+        case MODE_MCQ:   
+            label = "MCQ";   
+            sub = "Press A-D then Touch";  
+            break;
+        case MODE_NUM:   
+            label = gState.numInput.length() > 0 ? gState.numInput.c_str() : "NUM";
+            sub = "Keys 0-9  Touch=Send";  
+            showBuffer = true;
+            break;
+        case MODE_ROLL:
+            label = gState.numInput.length() > 0 ? gState.numInput.c_str() : "ROLL";
+            sub = "Enter Roll n Touch";
+            showBuffer = true;
+            break;
+        case MODE_VOICE: 
+            label = "VOICE"; 
+            sub = "Touch: Start/Stop/OK";  
+            break;
+        case MODE_DONE:  
+            label = "DONE";  
+            sub = "Check Web Browser";     
+            break;
+        case MODE_READY: 
+            label = "READY"; 
+            sub = "Wait for test start";    
+            break;
+        default:         
+            label = "OFF";   
+            sub = "Turn Switch ON";  
+            break;
     }
 
     _bigText(label, 18);
