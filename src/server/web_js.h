@@ -19,7 +19,8 @@ let curIndex    = -1;     // sequence number from ESP
 let curMode     = 'IDLE';
 let curQuizId   = "";
 let curQuizTitle = "";
-let answers     = [];     // history: {question, type, val, time, options}
+let curRootIndex = -1;
+let answers      = {};     // Keyed by rootIndex: { q, type, answer, followUpAnswer, audioFile, followUpAudioFile, time }
 let voiceBlobs  = {};     // Map by index
 let testActive  = false;
 let testDone    = false;
@@ -40,7 +41,7 @@ let lastInput   = "";
 // ============================================================
 document.addEventListener('DOMContentLoaded', () => {
   const btnLoad = $('btnLoad'), btnCancel = $('btnCancelLoad'), btnAuto = $('btnAuto');
-  const btnParse = $('btnParse'), btnSubmit = $('btnSubmit'), btnStart = $('btnStart');
+  const btnParse = $('btnParse'), btnSubmit = $('btnSubmit'), btnStart = $('btnStart'), btnEnd = $('btnEndQuiz');
   
   if(btnLoad) btnLoad.addEventListener('click', () => show('loadCard'));
   if(btnCancel) btnCancel.addEventListener('click', () => hide('loadCard'));
@@ -48,9 +49,10 @@ document.addEventListener('DOMContentLoaded', () => {
   if(btnParse) btnParse.addEventListener('click', parseJsonInput);
   if(btnSubmit) btnSubmit.addEventListener('click', finalizeSubmission);
   
-  const btnHWS = $('btnHWSubmit'), btnGBR = $('btnGoBackReview');
+  const btnHWS = $('btnHWSubmit'), btnGBR = $('btnGoBackReview'), btnHome = $('btnHome');
   if(btnHWS) btnHWS.addEventListener('click', finalizeSubmission);
   if(btnGBR) btnGBR.addEventListener('click', () => fetch('/api/mode?m=NEXT').catch(()=>{}));
+  if(btnHome) btnHome.addEventListener('click', resetToHome);
 
   if(btnStart) btnStart.addEventListener('click', async () => {
     if(!testActive) {
@@ -72,12 +74,26 @@ document.addEventListener('DOMContentLoaded', () => {
     vPre.onended = () => { $('waPlayBtn').textContent = '▶'; $('waFill').style.width = '0%'; }
   }
 
-  const btnEnd = $('btnEndQuiz');
   if(btnEnd) btnEnd.addEventListener('click', () => {
       if(confirm("End test and view results now?")) {
           finalizeSubmission();
       }
   });
+
+  const btnSaveCfg = $('btnSaveConfig');
+  if(btnSaveCfg) {
+    btnSaveCfg.addEventListener('click', () => {
+      const ip = $('serverIpIn').value.trim();
+      localStorage.setItem('backendIp', ip);
+      $('saveStatus').textContent = "✅ Saved!";
+      setTimeout(() => { $('saveStatus').textContent = ""; }, 2000);
+    });
+  }
+
+  // Load saved IP (Default to hardcoded if none in storage)
+  const savedIp = localStorage.getItem('backendIp');
+  if(savedIp) $('serverIpIn').value = savedIp;
+  else $('serverIpIn').value = "10.30.233.173:3000";
 
   startPoll();
 });
@@ -148,15 +164,15 @@ function onESPState(d){
 
     if(d.index !== curIndex || d.mode !== curMode || (d.q && newText !== oldText)){
        if (curQDoc && curIndex !== -1) {
-           // Use previous interaction from ESP if available for reliable sync
            let finalVal = lastInput;
            if (d.prevSel) finalVal = d.prevSel;
            else if (d.prevNum) finalVal = d.prevNum;
            
-           saveCurrentAnswer(prevEspSec, finalVal);
+           saveCurrentAnswer(prevEspSec, finalVal, curRootIndex);
        }
        curIndex = d.index;
        curMode = d.mode;
+       curRootIndex = d.rootIndex !== undefined ? d.rootIndex : curRootIndex;
        curQDoc = d.q;
        lastInput = ""; // Reset for new question
        renderQuestion(d.mode, d.q);
@@ -181,17 +197,35 @@ function onESPState(d){
   }
 }
 
-function saveCurrentAnswer(sec, val) {
-    if (!curQDoc) return;
+function saveCurrentAnswer(sec, val, rootIdx) {
+    if (!curQDoc || rootIdx === -1) return;
     const dur = Math.max(sec, Math.floor((Date.now() - localStartTime)/1000));
-    answers[curIndex] = {
-        question: curQDoc.text || curQDoc.question,
-        type: curQDoc.type,
-        val: val || 'no answer',
-        expected: curQDoc.answer,
-        time: dur,
-        options: curQDoc.options
-    };
+    const isVoice = (curQDoc.type === 'voice');
+    const answerVal = isVoice ? "VOICE" : (val || 'no answer');
+    
+    if (!answers[rootIdx]) {
+        answers[rootIdx] = { 
+            question: curQDoc.text || curQDoc.question,
+            type: curQDoc.type,
+            answer: answerVal,
+            followUpAnswer: "",
+            audioFile: isVoice ? `audio_q${rootIdx}.mp3` : "",
+            followUpAudioFile: "",
+            time: dur,
+            options: curQDoc.options
+        };
+    } else {
+        // It's a follow-up
+        if (isVoice) {
+            answers[rootIdx].followUpAnswer = "VOICE_FOLLOWUP";
+            answers[rootIdx].followUpAudioFile = `audio_q${rootIdx}_f.mp3`;
+        } else {
+            // Append if multiple follow-ups, or just set if first
+            if (answers[rootIdx].followUpAnswer) answers[rootIdx].followUpAnswer += " | " + val;
+            else answers[rootIdx].followUpAnswer = val;
+        }
+        answers[rootIdx].time += dur;
+    }
 }
 
 function renderQuestion(mode, q){
@@ -236,14 +270,17 @@ function handleKey(key){
     if(key === '0' && voiceStage === 2) toggleLocalPlayback();
     if(key.toUpperCase() === 'D' && voiceStage === 2) {
       voiceStage = 0; hide('voicePlayback'); updateVoiceUI();
-      voiceBlobs[curIndex] = null; fetch('/api/reset_voice');
+      const voiceKey = answers[curRootIndex]?.answer === "VOICE" ? `${curRootIndex}_f` : `${curRootIndex}_m`;
+      voiceBlobs[voiceKey] = null; fetch('/api/reset_voice');
     }
   }
 }
 
 async function handleTouch(stage){
-  if(!testActive || !curQDoc) return;
-  if(curQDoc.type === 'voice' && stage === 'CONFIRMED' && voiceStage === 2){
+  if(!testActive || !curQDoc || curQDoc.type !== 'voice') return;
+  if(stage === 'REC_START') { voiceStage = 1; startRecording(); updateVoiceUI(); }
+  else if(stage === 'REC_STOP') { voiceStage = 2; stopRecording(); updateVoiceUI(); }
+  else if(stage === 'CONFIRMED' && voiceStage === 2){
     voiceStage = 3; updateVoiceUI();
   }
 }
@@ -288,7 +325,7 @@ async function startRecording(){
         console.log("[VOICE] Mic stream missing, requesting now...");
         const ok = await requestMic();
         if (!ok) {
-            $('vStatus').textContent = '❌ Microphone access denied';
+            $('vStatus').textContent = 'Microphone access denied';
             return;
         }
     }
@@ -298,25 +335,28 @@ async function startRecording(){
         mediaRec.ondataavailable = e => audioChunks.push(e.data);
         mediaRec.onstop = async () => {
           const webmBlob = new Blob(audioChunks, {type:'audio/webm'});
-          $('vStatus').textContent = '⌛ Converting to MP3...';
+          $('vStatus').textContent = 'Converting to MP3...';
           try {
-              const mp3Blob = await encodeToMp3(webmBlob);
-              voiceBlobs[curIndex] = mp3Blob;
-              $('voicePreview').src = URL.createObjectURL(mp3Blob);
-              show('voicePlayback');
-              $('vStatus').textContent = '✅ MP3 Ready. #=Confirm';
-          } catch(e) {
-              console.error("[VOICE] MP3 Conversion failed:", e);
-              voiceBlobs[curIndex] = webmBlob; // Fallback
-              $('vStatus').textContent = '⚠️ WebM fallback. #=Confirm';
-          }
+               const mp3Blob = await encodeToMp3(webmBlob);
+               const mKey = `${curRootIndex}_m`;
+               const voiceKey = voiceBlobs[mKey] ? `${curRootIndex}_f` : mKey;
+               voiceBlobs[voiceKey] = mp3Blob;
+               $('voicePreview').src = URL.createObjectURL(mp3Blob);
+               show('voicePlayback');
+               $('vStatus').textContent = 'MP3 Ready. #=Confirm';
+           } catch(e) {
+               console.error("[VOICE] MP3 Conversion failed:", e);
+               const voiceKey = answers[curRootIndex]?.answer === "VOICE" ? `${curRootIndex}_f` : `${curRootIndex}_m`;
+               voiceBlobs[voiceKey] = webmBlob; // Fallback
+               $('vStatus').textContent = 'WebM fallback. #=Confirm';
+           }
         };
         mediaRec.start();
         $('vRing').className = 'v-ring rec';
-        $('vStatus').textContent = '🔴 Recording...';
+        $('vStatus').textContent = 'Recording...';
     } catch(e) {
         console.error("[VOICE] MediaRecorder Error:", e);
-        $('vStatus').textContent = '❌ Recording failed to start';
+        $('vStatus').textContent = 'Recording failed to start';
     }
 }
 
@@ -325,6 +365,9 @@ async function encodeToMp3(blob) {
     const audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 44100 });
     const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
     
+    if (typeof lamejs === 'undefined') {
+        throw new Error("lamejs not loaded");
+    }
     const mp3encoder = new lamejs.Mp3Encoder(1, audioBuffer.sampleRate, 128);
     const samples = audioBuffer.getChannelData(0); 
     const sampleBlockSize = 1152;
@@ -366,44 +409,58 @@ function updateVoiceUI(){
 //  SUBMISSION & RESULTS
 // ============================================================
 function startActualTest() {
-  testActive = true; curIndex = -1; curQDoc = null; answers = []; voiceBlobs = {};
+  testActive = true; curIndex = -1; curQDoc = null; answers = {}; voiceBlobs = {};
   show('btnSubmit'); fetch('/api/start_test');
   renderQuestion('ROLL', null);
 }
-
-async function finalizeSubmission(){
-  testActive = false; testDone = true;
-  showResults(); 
+async function finalizeSubmission() {
+  console.log("[SUBMIT] Finalizing quiz...");
   
+  testActive = false;
+  testDone = true;
+  
+  // Inform ESP that we are done
+  try {
+    await fetch('/api/mode?m=DONE');
+  } catch(e) {}
+  
+  // 1. Show results locally
+  showResults();
+
+  // 2. Background sync to backend if configured
   const serverIp = $('serverIpIn').value.trim();
-  if(!serverIp) { console.warn("No server IP configured. Skipping backend submission."); return; }
-  
-  const backendUrl = `http://${serverIp}/api/submit`;
-  console.log("[SUBMIT] Posting results to:", backendUrl);
-
-  const formData = new FormData();
-  formData.append('rollNumber', $('rollDisp').textContent || 'unknown');
-  formData.append('quizId', curQuizId || 'demo_quiz');
-  
-  // Prepare answers for backend (mapping to the simple string array it expects)
-  const answersList = answers.map(a => a.val);
-  formData.append('answers', JSON.stringify(answersList));
-
-  // Attach first voice recording if found
-  const firstVoiceKey = Object.keys(voiceBlobs).find(k => voiceBlobs[k]);
-  if(firstVoiceKey) {
-      formData.append('audio', voiceBlobs[firstVoiceKey], 'submission.mp3');
-  }
+  if(!serverIp) return;
 
   try {
-      const resp = await fetch(backendUrl, { method: 'POST', body: formData });
-      if(resp.ok) console.log("[SUBMIT] Backend sync successful");
-      else console.error("[SUBMIT] Backend rejected submission:", resp.status);
-  } catch(e) {
-      console.error("[SUBMIT] Could not reach backend:", e);
-  }
+    const backendUrl = `http://${serverIp}/api/submit`;
+    const formData = new FormData();
+    formData.append('rollNumber', $('rollDisp').textContent || 'unknown');
+    formData.append('quizId', curQuizId || 'demo_quiz');
+    
+    const sortedKeys = Object.keys(answers).sort((a,b) => a-b);
+    const answersList = sortedKeys.map(k => ({
+        answer: answers[k].answer,
+        followUpAnswer: answers[k].followUpAnswer,
+        audioFile: answers[k].audioFile,
+        followUpAudioFile: answers[k].followUpAudioFile
+    }));
+    formData.append('answers', JSON.stringify(answersList));
 
-  fetch('/api/mode?m=DONE');
+    // Attach voice recordings
+    Object.keys(voiceBlobs).forEach(key => {
+        const blob = voiceBlobs[key];
+        if (!blob) return;
+        const [rootIdx, type] = key.split('_');
+        const filename = type === 'm' ? `audio_q${rootIdx}.mp3` : `audio_q${rootIdx}_f.mp3`;
+        formData.append('audio', blob, filename);
+    });
+
+    fetch(backendUrl, { method: 'POST', body: formData })
+      .then(r => console.log("[SUBMIT] Backend sync status:", r.status))
+      .catch(e => console.warn("[SUBMIT] Background sync failed:", e));
+  } catch(e) {
+    console.error("[SUBMIT] Sync error:", e);
+  }
 }
 
 function showResults() {
@@ -411,64 +468,54 @@ function showResults() {
     let correct = 0, total = 0;
     
     // Process final question before showing results
-    if (curQDoc && curIndex !== -1 && !answers[curIndex]) {
-        saveCurrentAnswer(espSec, null); 
+    if (curQDoc && curIndex !== -1 && !answers[curRootIndex]?.answer) {
+        saveCurrentAnswer(espSec, null, curRootIndex); 
     }
 
-    answers.forEach((ans, i) => {
-        if (!ans) return;
+    Object.keys(answers).sort((a,b)=>a-b).forEach(k => {
+        const ans = answers[k];
         total++;
-        let isCorrect = false;
-        let displayAns = ans.val;
-
-        if (ans.type === 'mcq' && ans.options) {
-            const optIdx = ans.val.charCodeAt(0) - 65;
-            const opt = ans.options[optIdx];
-            if (opt) {
-                displayAns = `${ans.val}) ${typeof opt === 'object' ? opt.text : opt}`;
-                if (opt.isCorrect) { isCorrect = true; correct++; }
-            }
-        } else if (ans.type === 'numeric') {
-            if (ans.val !== 'no answer') {
-                if (ans.expected !== undefined) {
-                    if (parseFloat(ans.val) === parseFloat(ans.expected)) { isCorrect = true; correct++; }
-                } else {
-                    isCorrect = true; correct++; // fallback if no answer key provided
-                }
-            }
-        } else if (ans.type === 'voice') {
-            isCorrect = !!voiceBlobs[i];
-            displayAns = isCorrect ? "Voice Recording Submitted" : "No recording found";
-            if(isCorrect) correct++;
-        }
-
+        let isCorrect = false; // We can't easily calculate correctness for follow-ups here without deeper logic
+        
         const card = document.createElement('div');
         card.className = 'res-card fade';
-        let html = `
+        // Create audio HTML if blobs exist
+        let audioHtml = '';
+        const mBlob = voiceBlobs[`${k}_m`];
+        const fBlob = voiceBlobs[`${k}_f`];
+
+        if (mBlob) {
+            audioHtml += `<div style="margin-top:10px;"><p class="res-ans"><strong>Main Recording:</strong></p>
+                          <audio controls src="${URL.createObjectURL(mBlob)}" style="display:block; width:100%; margin-top:5px;"></audio></div>`;
+        }
+        if (fBlob) {
+            audioHtml += `<div style="margin-top:10px;"><p class="res-ans"><strong>Follow-up Recording:</strong></p>
+                          <audio controls src="${URL.createObjectURL(fBlob)}" style="display:block; width:100%; margin-top:5px;"></audio></div>`;
+        }
+
+        card.innerHTML = `
             <div class="res-head">
-                <div><span>Q${i+1}</span> <span class="badge ${ans.type}">${ans.type}</span></div>
-                <span class="mbadge ${isCorrect ? 'c' : 'w'}">${isCorrect ? '✓' : '✗'}</span>
+                <div><span>Q${parseInt(k)+1}</span> <span class="badge ${ans.type}">${ans.type}</span></div>
             </div>
             <p>${ans.question}</p>
-            <p class="res-ans">Your Answer: <strong>${displayAns}</strong></p>
+            <p class="res-ans">Answer: <strong>${ans.answer}</strong></p>
+            ${ans.followUpAnswer ? `<p class="res-ans">Follow-up: <strong>${ans.followUpAnswer}</strong></p>` : ''}
             <p class="res-ans">Time taken: <strong>${ans.time}s</strong></p>
+            ${audioHtml}
         `;
 
-        if (ans.type === 'voice' && voiceBlobs[i]) {
-            const url = URL.createObjectURL(voiceBlobs[i]);
-            html += `
-                <div class="wa-audio" style="margin-top:10px;">
-                    <div class="wa-play" onclick="const a=this.nextElementSibling; if(a.paused){a.play();this.textContent='⏸'}else{a.pause();this.textContent='▶'}">▶</div>
-                    <audio src="${url}" preload="auto" onended="this.previousElementSibling.textContent='▶'"></audio>
-                    <div class="wa-info"><div class="wa-title">Playback Recording</div></div>
-                </div>
-            `;
-        }
-        card.innerHTML = html;
         resBody.appendChild(card);
     });
-    $('scoreBig').textContent = `${correct}/${total}`;
-    show('resCard'); hide('qCard'); hide('ctrlCard');
+    $('scoreBig').textContent = total > 0 ? total : '0';
+    show('resCard'); hide('qCard'); hide('ctrlCard'); hide('reviewCard');
+}
+
+function resetToHome() {
+    testActive = false;
+    testDone = false;
+    hide('resCard');
+    show('ctrlCard');
+    fetch('/api/mode?m=IDLE').catch(()=>{});
 }
 
 async function uploadAllAudio() {

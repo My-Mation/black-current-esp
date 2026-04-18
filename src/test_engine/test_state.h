@@ -129,7 +129,7 @@ public:
     void loadQuiz(const String& json) {
         if (quizDoc) delete quizDoc;
         // Allocate buffer for the tree. Tree can be nested, so provide enough space.
-        quizDoc = new DynamicJsonDocument(8192); 
+        quizDoc = new DynamicJsonDocument(24576); 
         DeserializationError err = deserializeJson(*quizDoc, json);
         if (err) {
             Serial.printf("[STATE] JSON Load Error: %s\n", err.c_str());

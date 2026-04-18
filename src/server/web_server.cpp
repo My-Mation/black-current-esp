@@ -69,12 +69,16 @@ void WebServerHandler::update() {
 
 void WebServerHandler::_sendJson(const String& json) {
     _srv.sendHeader("Access-Control-Allow-Origin", "*");
+    _srv.sendHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    _srv.sendHeader("Access-Control-Allow-Headers", "Content-Type");
     _srv.sendHeader("Cache-Control", "no-cache");
     _srv.send(200, "application/json", json);
 }
 
 void WebServerHandler::_sendOk() {
     _srv.sendHeader("Access-Control-Allow-Origin", "*");
+    _srv.sendHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    _srv.sendHeader("Access-Control-Allow-Headers", "Content-Type");
     _srv.send(200, "text/plain", "OK");
 }
 
@@ -98,8 +102,8 @@ void WebServerHandler::_handleRoot() {
 }
 
 void WebServerHandler::_handleApiState() {
-    // Build minimal JSON state snapshot each poll
-    StaticJsonDocument<2048> doc;
+    // Build JSON state snapshot each poll
+    StaticJsonDocument<4096> doc;
 
     // Pending key (consumed — one-shot)
     if (gState.keyReady) {
@@ -142,6 +146,7 @@ void WebServerHandler::_handleApiState() {
     doc["roll"] = gState.studentRoll;
     doc["input"] = gState.numInput;
     doc["index"] = gState.questionCounter;
+    doc["rootIndex"] = gState.rootIndex;
     doc["quizId"] = gState.quizId;
     doc["quizTitle"] = gState.quizTitle;
     
@@ -203,6 +208,7 @@ void WebServerHandler::_handleApiLoadQuestions() {
         if (_parseQuestionsJson(body)) {
              _sendOk();
         } else {
+             _srv.sendHeader("Access-Control-Allow-Origin", "*");
              _srv.send(400, "text/plain", "Invalid JSON");
         }
     }
@@ -212,6 +218,7 @@ void WebServerHandler::_handleApiGetQuestions() {
     if (_lastJson.length() > 0) {
         _sendJson(_lastJson);
     } else {
+        _srv.sendHeader("Access-Control-Allow-Origin", "*");
         _srv.send(404, "text/plain", "No questions loaded yet");
     }
 }
@@ -270,5 +277,6 @@ void WebServerHandler::_handleCors() {
 }
 
 void WebServerHandler::_handleNotFound() {
+    _srv.sendHeader("Access-Control-Allow-Origin", "*");
     _srv.send(404, "text/plain", "Not found");
 }
