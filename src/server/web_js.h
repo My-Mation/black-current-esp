@@ -392,9 +392,18 @@ async function encodeToMp3(blob) {
 }
 
 function stopRecording(){ if(mediaRec) mediaRec.stop(); $('vRing').className = 'v-ring done'; }
-function toggleLocalPlayback() {
-  const a = $('voicePreview'); const b = $('waPlayBtn');
-  if(a.paused){ a.play(); b.textContent = '⏸'; } else { a.pause(); b.textContent = '▶'; }
+function toggleLocalPlayback(btn, audioId) {
+  const a = audioId ? $(audioId) : $('voicePreview');
+  const b = btn || $('waPlayBtn');
+  if(a.paused){ 
+    // Pause all other audios in results if any
+    document.querySelectorAll('audio').forEach(el => { if(el !== a) el.pause(); });
+    document.querySelectorAll('.wa-play').forEach(el => { if(el !== b) el.textContent = '▶'; });
+    
+    a.play(); b.textContent = '⏸'; 
+  } else { 
+    a.pause(); b.textContent = '▶'; 
+  }
 }
 function updateVoiceUI(){
   ['vs1', 'vs2', 'vs3'].forEach((id, i) => {
@@ -465,49 +474,87 @@ async function finalizeSubmission() {
 
 function showResults() {
     const resBody = $('resBody'); resBody.innerHTML = '';
-    let correct = 0, total = 0;
+    let total = 0;
     
-    // Process final question before showing results
     if (curQDoc && curIndex !== -1 && !answers[curRootIndex]?.answer) {
         saveCurrentAnswer(espSec, null, curRootIndex); 
     }
 
-    Object.keys(answers).sort((a,b)=>a-b).forEach(k => {
+    const keys = Object.keys(answers).sort((a,b)=>a-b);
+    keys.forEach((k, idx) => {
         const ans = answers[k];
         total++;
-        let isCorrect = false; // We can't easily calculate correctness for follow-ups here without deeper logic
         
         const card = document.createElement('div');
         card.className = 'res-card fade';
-        // Create audio HTML if blobs exist
-        let audioHtml = '';
-        const mBlob = voiceBlobs[`${k}_m`];
-        const fBlob = voiceBlobs[`${k}_f`];
+        
+        // Helper to build audio player UI
+        const buildAudioPlayer = (blob, label, id) => {
+            if (!blob) return '';
+            const url = URL.createObjectURL(blob);
+            return `
+                <div class="wa-audio" style="margin: 10px 0 0 0; max-width: 100%;">
+                    <div class="wa-play" onclick="toggleLocalPlayback(this, '${id}')">▶</div>
+                    <div class="wa-info">
+                        <div class="wa-title"><span>${label}</span></div>
+                        <div class="wa-prog"><div class="wa-fill" id="${id}_fill"></div></div>
+                        <div class="wa-dur">Click to listen</div>
+                    </div>
+                </div>
+                <audio id="${id}" src="${url}" class="hidden"></audio>
+            `;
+        };
 
-        if (mBlob) {
-            audioHtml += `<div style="margin-top:10px;"><p class="res-ans"><strong>Main Recording:</strong></p>
-                          <audio controls src="${URL.createObjectURL(mBlob)}" style="display:block; width:100%; margin-top:5px;"></audio></div>`;
-        }
-        if (fBlob) {
-            audioHtml += `<div style="margin-top:10px;"><p class="res-ans"><strong>Follow-up Recording:</strong></p>
-                          <audio controls src="${URL.createObjectURL(fBlob)}" style="display:block; width:100%; margin-top:5px;"></audio></div>`;
-        }
+        const mAudio = buildAudioPlayer(voiceBlobs[`${k}_m`], 'Main Recording', `aud_${k}_m`);
+        const fAudio = buildAudioPlayer(voiceBlobs[`${k}_f`], 'Follow-up Recording', `aud_${k}_f`);
 
         card.innerHTML = `
             <div class="res-head">
-                <div><span>Q${parseInt(k)+1}</span> <span class="badge ${ans.type}">${ans.type}</span></div>
+                <div class="q-header">
+                    <span class="q-idx">Q${parseInt(k)+1}</span>
+                    <span class="badge ${ans.type}">${ans.type}</span>
+                </div>
+                <div class="time-taken">${ans.time}s</div>
             </div>
-            <p>${ans.question}</p>
-            <p class="res-ans">Answer: <strong>${ans.answer}</strong></p>
-            ${ans.followUpAnswer ? `<p class="res-ans">Follow-up: <strong>${ans.followUpAnswer}</strong></p>` : ''}
-            <p class="res-ans">Time taken: <strong>${ans.time}s</strong></p>
-            ${audioHtml}
+            <div class="res-qtxt">${ans.question}</div>
+            
+            <div class="res-ans-row">
+                <span class="res-ans-lbl">Answer:</span>
+                <span class="res-ans-val">${ans.type === 'voice' ? 'VOICE' : ans.answer}</span>
+            </div>
+            
+            ${ans.followUpAnswer && ans.type !== 'voice' ? `
+            <div class="res-ans-row">
+                <span class="res-ans-lbl">Follow-up:</span>
+                <span class="res-ans-val">${ans.followUpAnswer}</span>
+            </div>` : ''}
+
+            ${mAudio}
+            ${fAudio}
         `;
 
         resBody.appendChild(card);
+        
+        // Add progress tracking for the newly created audio elements
+        [`aud_${k}_m`, `aud_${k}_f`].forEach(id => {
+            const a = document.getElementById(id);
+            if (a) {
+                a.ontimeupdate = () => {
+                    const fill = $(id + '_fill');
+                    if (fill && a.duration) fill.style.width = (a.currentTime / a.duration * 100) + '%';
+                };
+                a.onended = () => {
+                    const btn = a.previousElementSibling.querySelector('.wa-play');
+                    if (btn) btn.textContent = '▶';
+                    const fill = $(id + '_fill');
+                    if (fill) fill.style.width = '0%';
+                };
+            }
+        });
     });
-    $('scoreBig').textContent = total > 0 ? total : '0';
-    show('resCard'); hide('qCard'); hide('ctrlCard'); hide('reviewCard');
+
+    $('scoreBig').textContent = total || '0';
+    show('resCard'); hide('qCard'); hide('ctrlCard'); hide('reviewCard'); hide('rollCard');
 }
 
 function resetToHome() {

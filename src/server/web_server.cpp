@@ -103,7 +103,7 @@ void WebServerHandler::_handleRoot() {
 
 void WebServerHandler::_handleApiState() {
     // Build JSON state snapshot each poll
-    StaticJsonDocument<4096> doc;
+    StaticJsonDocument<8192> doc;
 
     // Pending key (consumed — one-shot)
     if (gState.keyReady) {
@@ -238,8 +238,61 @@ bool WebServerHandler::_parseQuestionsJson(const String& body) {
 void WebServerHandler::_handleApiSubmit() {
     gState.finishTest();
     gOled.showDone();
-    Serial.println("[SUBMIT] Test submitted");
+    Serial.println("[SUBMIT] Test submitted. Attempting background sync...");
+    
+    // Trigger background send
+    sendResultsToServer();
+    
     _sendOk();
+}
+
+void WebServerHandler::sendResultsToServer() {
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.println("[SYNC] No WiFi, cannot send results.");
+        return;
+    }
+
+    // Build JSON payload
+    DynamicJsonDocument doc(16384); 
+    doc["quizId"] = gState.quizId;
+    doc["rollNumber"] = gState.studentRoll;
+    doc["timestamp"] = millis();
+
+    JsonArray results = doc.createNestedArray("interactions");
+    for (int i = 0; i <= gState.questionCounter; i++) {
+        if (!gState.interactions[i].answered) continue;
+        
+        JsonObject obj = results.createNestedObject();
+        obj["qIdx"] = i;
+        obj["type"] = gState.interactions[i].questionType;
+        obj["sel"] = gState.interactions[i].selectedOption;
+        obj["num"] = gState.interactions[i].numericValue;
+        obj["timeTaken"] = (gState.interactions[i].submitTimeMs - gState.interactions[i].startTimeMs) / 1000;
+    }
+
+    String payload;
+    serializeJson(doc, payload);
+
+    // Send to backend
+    HTTPClient http;
+    http.begin(SUBMIT_URL);
+    http.addHeader("Content-Type", "application/json");
+
+    Serial.println("[SYNC] Sending results to: " + String(SUBMIT_URL));
+    int httpCode = http.POST(payload);
+
+    if (httpCode > 0) {
+        Serial.printf("[SYNC] Results sent, code: %d\n", httpCode);
+        if (httpCode == 200) {
+            gOled.showStatus("Sync Success", "Results Posted");
+        } else {
+            gOled.showStatus("Sync Error", String("Code: ") + httpCode);
+        }
+    } else {
+        Serial.printf("[SYNC] POST failed: %s\n", http.errorToString(httpCode).c_str());
+        gOled.showStatus("Sync Failed", "Server Unreachable");
+    }
+    http.end();
 }
 
 void WebServerHandler::_handleApiSyncAns() {

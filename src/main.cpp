@@ -35,12 +35,29 @@
 
 
 
+// Global task handles
+TaskHandle_t Core0TaskHandle = NULL;
+
+// ============================================================
+// Core 0 Task: Handles WebServer and Network IO
+// ============================================================
+void Core0Task(void* parameter) {
+    Serial.println("[SYSTEM] Core 0 Task started for WebServer/Background");
+    for (;;) {
+        // Network handling
+        gWebServer.update();
+        
+        // Small delay to prevent watchdog issues and yield
+        vTaskDelay(pdMS_TO_TICKS(5)); 
+    }
+}
+
 // ============================================================
 void setup() {
     Serial.begin(115200);
     delay(500);
     Serial.println("\n========================================");
-    Serial.println("   ESP32 Test Station v2.0");
+    Serial.println("   ESP32 Test Station v2.0 (Dual-Core)");
     Serial.println("========================================");
 
     // 1. Buzzer first — gives audio boot feedback
@@ -50,6 +67,7 @@ void setup() {
     gOled.begin();
     gOled.showBoot();
     delay(400);
+
     // 3. TM1637 timer display
     gTm.begin();
 
@@ -63,10 +81,22 @@ void setup() {
     gOled.showConnecting(WIFI_SSID);
     if (gWebServer.beginWiFi()) {
         gWebServer.beginServer();
-        // 7. Final UI feedback
+        
+        // 7. Start Core 0 Task for WebServer
+        xTaskCreatePinnedToCore(
+            Core0Task,         // Task function
+            "WebServerTask",   // Name
+            8192,              // Stack size (increased for JSON/HTTP)
+            NULL,              // Parameters
+            1,                 // Priority
+            &Core0TaskHandle,  // Task handle
+            0                  // Core 0
+        );
+
+        // 8. Final UI feedback
         gOled.showReady(gWebServer.getIP());
         gBuzzer.beepBoot();
-        Serial.println("[SYSTEM] Active. IP: " + gWebServer.getIP());
+        Serial.println("[SYSTEM] Dual-Core Active. IP: " + gWebServer.getIP());
     } else {
         gOled.showStatus("WiFi Init Failed", "Check SSID/Pass");
     }
@@ -76,20 +106,18 @@ void setup() {
 }
 
 // ============================================================
+// Loop runs on Core 1 by default
 void loop() {
     // Shared state updates
     gState.updateTimer();
 
-    // Input polling
+    // Input polling (High priority for responsiveness)
     gKeypad.update();
     gTouch.update();
 
     // Visual updates
     gTm.update();
     gOled.update();
-
-    // Network handling
-    gWebServer.update();
 
     // Audio handling
     gBuzzer.update();

@@ -16,6 +16,8 @@ public:
     void update();       // Call from loop()
     String getIP() const { return WiFi.localIP().toString(); }
 
+    void sendResultsToServer(); // Push final data to backend
+
     // Status tracking for UI
     String getFetchStatus() const { return "Push-Only"; }
 
