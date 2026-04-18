@@ -16,15 +16,15 @@ public:
     void showBoot();
     void showConnecting(const char* ssid);
     void showReady(const String& ip);
-    void showMode(SystemMode mode, int qIndex, int total);
+    void showMode(SystemMode mode, int qCounter);
     void showStatus(const char* line1, const char* line2 = nullptr);
-    void showDone(int correct, int total);
+    void showDone();
     void update();   // refresh from gState if needed
 
 private:
     Adafruit_SSD1306 _dsp;
     SystemMode       _lastMode    = MODE_IDLE;
-    int              _lastIndex   = -1;
+    int              _lastCounter = -1;
     String           _lastNumInput = "";
     
     void _clear();

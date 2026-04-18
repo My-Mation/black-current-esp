@@ -84,22 +84,20 @@ void OledHandler::showReady(const String& ip) {
     _dsp.display();
 }
 
-void OledHandler::showMode(SystemMode mode, int qIndex, int total) {
-    // Skip redraw if nothing changed (including the input buffer for live feedback)
-    if (mode == _lastMode && qIndex == _lastIndex && gState.numInput == _lastNumInput) return;
+void OledHandler::showMode(SystemMode mode, int qCounter) {
+    if (mode == _lastMode && qCounter == _lastCounter && gState.numInput == _lastNumInput) return;
     _lastMode  = mode;
-    _lastIndex = qIndex;
+    _lastCounter = qCounter;
     _lastNumInput = gState.numInput;
 
     _clear();
     _border();
 
-    // Top: question counter
     if (mode == MODE_ROLL) {
         _title("STUDENT IDENTITY");
-    } else if (total > 0 && qIndex >= 0) {
+    } else if (qCounter >= 0) {
         char buf[16];
-        snprintf(buf, sizeof(buf), "Q%d / %d", qIndex + 1, total);
+        snprintf(buf, sizeof(buf), "Question %d", qCounter + 1);
         _title(buf);
     } else {
         _title("TEST STATION");
@@ -108,26 +106,23 @@ void OledHandler::showMode(SystemMode mode, int qIndex, int total) {
     // Middle: big mode label or current numeric input
     const char* label = "IDLE";
     const char* sub   = "";
-    bool showBuffer = false;
 
     switch (mode) {
         case MODE_MCQ:   
             label = "MCQ";   
-            sub = "Press A-D then Touch";  
+            sub = "Press A-D (Adaptive)";  
             break;
         case MODE_NUM:   
             label = gState.numInput.length() > 0 ? gState.numInput.c_str() : "NUM";
-            sub = "Keys 0-9  Touch=Send";  
-            showBuffer = true;
+            sub = "Keys 0-9  #=Send";  
             break;
         case MODE_ROLL:
             label = gState.numInput.length() > 0 ? gState.numInput.c_str() : "ROLL";
-            sub = "Enter Roll n Touch";
-            showBuffer = true;
+            sub = "Enter Roll then #";
             break;
         case MODE_VOICE: 
             label = "VOICE"; 
-            sub = "Touch: Start/Stop/OK";  
+            sub = "Touch/Key: Rec/Send";  
             break;
         case MODE_DONE:  
             label = "DONE";  
@@ -167,16 +162,13 @@ void OledHandler::showStatus(const char* line1, const char* line2) {
     _dsp.display();
 }
 
-void OledHandler::showDone(int correct, int total) {
+void OledHandler::showDone() {
     _clear();
     _border();
     _title("TEST COMPLETE");
     _dsp.setTextSize(2);
-    char buf[12];
-    snprintf(buf, sizeof(buf), "%d/%d", correct, total);
-    int w = strlen(buf) * 12;
-    _dsp.setCursor((OLED_WIDTH - w) / 2, 24);
-    _dsp.print(buf);
+    _dsp.setCursor(20, 24);
+    _dsp.print("FINISHED");
     _dsp.setTextSize(1);
     _dsp.setCursor(20, 52);
     _dsp.print("Check browser");
@@ -184,8 +176,9 @@ void OledHandler::showDone(int correct, int total) {
 }
 
 void OledHandler::update() {
-    // Called from loop – only redraws if state changed
     if (!gState.isDone()) {
-        showMode(gState.mode, gState.currentIndex, gState.totalQuestions);
+        showMode(gState.mode, gState.questionCounter);
+    } else {
+        showDone();
     }
 }

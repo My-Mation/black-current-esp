@@ -6,6 +6,7 @@
 #include "../test_engine/test_state.h"
 #include "../hardware/oled_handler.h"
 #include <ArduinoJson.h>
+#include <HTTPClient.h>
 
 WebServerHandler gWebServer;
 
@@ -37,6 +38,10 @@ bool WebServerHandler::beginWiFi() {
 void WebServerHandler::beginServer() {
     using namespace std::placeholders;
 
+    // Load persistent settings (Clear if empty)
+    _prefs.begin("quiz-cfg", false);
+    Serial.println("[SETTINGS] Persistent settings loaded");
+
     _srv.on("/",                  HTTP_GET,  [this](){ _handleRoot(); });
     _srv.on("/api/state",         HTTP_GET,  [this](){ _handleApiState(); });
     _srv.on("/api/mode",          HTTP_GET,  [this](){ _handleApiMode(); });
@@ -46,9 +51,10 @@ void WebServerHandler::beginServer() {
     _srv.on("/api/reset_voice",   HTTP_GET,  [this](){ _handleApiResetVoice(); });
     _srv.on("/api/load_questions",HTTP_POST, [this](){ _handleApiLoadQuestions(); });
     _srv.on("/api/load_questions",HTTP_OPTIONS,[this](){ _handleCors(); });
-    _srv.on("/api/submit",        HTTP_GET,  [this](){ _handleApiSubmit(); });
-    _srv.on("/api/upload_audio",  HTTP_POST, [this](){ _handleApiUploadAudio(); });
-    _srv.on("/api/upload_audio",  HTTP_OPTIONS,[this](){ _handleCors(); });
+    _srv.on("/api/get_questions",   HTTP_GET,  [this](){ _handleApiGetQuestions(); });
+    _srv.on("/api/submit",          HTTP_GET,  [this](){ _handleApiSubmit(); });
+    _srv.on("/api/upload_audio",    HTTP_POST, [this](){ _handleApiUploadAudio(); });
+    _srv.on("/api/upload_audio",    HTTP_OPTIONS,[this](){ _handleCors(); });
     _srv.onNotFound([this](){ _handleNotFound(); });
 
     _srv.begin();
@@ -93,14 +99,13 @@ void WebServerHandler::_handleRoot() {
 
 void WebServerHandler::_handleApiState() {
     // Build minimal JSON state snapshot each poll
-    StaticJsonDocument<256> doc;
+    StaticJsonDocument<2048> doc;
 
     // Pending key (consumed — one-shot)
     if (gState.keyReady) {
         char k = gState.consumeKey();
         doc["key"] = String(k);
-        Serial.printf("[POLL] Key delivered to browser: %c  Q-idx=%d\n",
-                      k, gState.currentIndex);
+        Serial.printf("[POLL] Key delivered to browser: %c\n", k);
     } else {
         doc["key"] = "";
     }
@@ -116,8 +121,6 @@ void WebServerHandler::_handleApiState() {
             default:               tStr = "NONE";       break;
         }
         doc["touch"] = tStr;
-        Serial.printf("[POLL] Touch delivered to browser: %s  Q-idx=%d\n",
-                      tStr, gState.currentIndex);
     } else {
         doc["touch"] = "NONE";
     }
@@ -137,8 +140,25 @@ void WebServerHandler::_handleApiState() {
     }
     doc["mode"] = modeStr;
     doc["roll"] = gState.studentRoll;
-    doc["index"] = gState.currentIndex;
     doc["input"] = gState.numInput;
+    doc["index"] = gState.questionCounter;
+    doc["quizId"] = gState.quizId;
+    doc["quizTitle"] = gState.quizTitle;
+    
+    // Send current interaction data for real-time sync
+    if (gState.questionCounter >= 0 && gState.questionCounter < 100) {
+        doc["sel"] = gState.interactions[gState.questionCounter].selectedOption;
+        doc["num"] = gState.interactions[gState.questionCounter].numericValue;
+    }
+    
+    doc["q"] = gState.currentNode;
+    doc["fetchStatus"] = getFetchStatus();
+
+    // Send previous interaction for reliable sync
+    if (gState.questionCounter > 0) {
+        doc["prevSel"] = gState.interactions[gState.questionCounter - 1].selectedOption;
+        doc["prevNum"] = gState.interactions[gState.questionCounter - 1].numericValue;
+    }
 
     String out;
     serializeJson(doc, out);
@@ -147,20 +167,18 @@ void WebServerHandler::_handleApiState() {
 
 
 void WebServerHandler::_handleApiMode() {
-    // Browser tells ESP what question type is active
+    // Browser tells ESP what question type is active (fallback/override)
     if (_srv.hasArg("m")) {
         String m = _srv.arg("m");
         m.toUpperCase();
-        if (m == "MCQ")   gState.mode = MODE_MCQ;
-        else if (m == "NUM") gState.mode = MODE_NUM;
-        else if (m == "NUMERIC") gState.mode = MODE_NUM;
+        if (m == "MCQ")        gState.mode = MODE_MCQ;
+        else if (m == "NUM")  gState.mode = MODE_NUM;
         else if (m == "VOICE") gState.mode = MODE_VOICE;
         else if (m == "DONE")  gState.mode = MODE_DONE;
-        else if (m == "PREV")  gState.prevQuestion();
-        else               gState.mode = MODE_IDLE;
-
+        else if (m == "NEXT")  gState.nextQuestion();
+        
         gOled.update();
-        Serial.println("[MODE] " + m);
+        Serial.println("[MODE_OVERRIDE] " + m);
     }
     _sendOk();
 }
@@ -168,14 +186,13 @@ void WebServerHandler::_handleApiMode() {
 void WebServerHandler::_handleApiStartTest() {
     gState.startTest();
     gOled.update();
-    Serial.println("[TEST] Started");
+    Serial.println("[TEST] Started (Adaptive)");
     _sendOk();
 }
 
 void WebServerHandler::_handleApiNextQuestion() {
     gState.nextQuestion();
-    Serial.printf("[SERVER] Advanced via API → idx=%d / total=%d\n",
-                  gState.currentIndex, gState.totalQuestions);
+    Serial.printf("[SERVER] Advanced via API → counter=%d\n", gState.questionCounter);
     gOled.update();
     _sendOk();
 }
@@ -183,46 +200,50 @@ void WebServerHandler::_handleApiNextQuestion() {
 void WebServerHandler::_handleApiLoadQuestions() {
     if (_srv.method() == HTTP_POST) {
         String body = _srv.arg("plain");
-        StaticJsonDocument<512> doc;
-        if (!deserializeJson(doc, body)) {
-            gState.totalQuestions = doc["count"] | 0;
-            gState.mode           = MODE_READY;
-            gState.currentIndex   = -1;
-
-            // Store question types
-            JsonArray types = doc["types"].as<JsonArray>();
-            int idx = 0;
-            for (JsonVariant t : types) {
-                String ts = t.as<String>();
-                if      (ts == "mcq")     gState.questionTypes[idx] = Q_MCQ;
-                else if (ts == "numeric") gState.questionTypes[idx] = Q_NUMERIC;
-                else if (ts == "voice")   gState.questionTypes[idx] = Q_VOICE;
-                else                      gState.questionTypes[idx] = Q_UNKNOWN;
-                idx++;
-                if (idx >= 50) break;
-            }
-
-            gOled.showStatus("Questions Loaded",
-                             (String(gState.totalQuestions) + " qns ready").c_str());
-            Serial.printf("[QUESTIONS] Loaded %d\n", gState.totalQuestions);
+        if (_parseQuestionsJson(body)) {
+             _sendOk();
+        } else {
+             _srv.send(400, "text/plain", "Invalid JSON");
         }
     }
-    _sendOk();
+}
+
+void WebServerHandler::_handleApiGetQuestions() {
+    if (_lastJson.length() > 0) {
+        _sendJson(_lastJson);
+    } else {
+        _srv.send(404, "text/plain", "No questions loaded yet");
+    }
+}
+
+bool WebServerHandler::_parseQuestionsJson(const String& body) {
+    gState.loadQuiz(body);
+    if (gState.quizDoc == nullptr) return false;
+
+    // Reset flow and Auto-Start
+    gState.startTest(); 
+    gOled.update(); // Immediately show the Roll Number input screen
+    Serial.printf("[STATE] Adaptive Engine updated. Quiz: %s (ID: %s)\n", gState.quizTitle.c_str(), gState.quizId.c_str());
+    
+    return true;
 }
 
 void WebServerHandler::_handleApiSubmit() {
-    gState.mode = MODE_DONE;
-    gState.timerRunning = false;
-    gOled.showDone(0, gState.totalQuestions);  // score computed browser-side
+    gState.finishTest();
+    gOled.showDone();
     Serial.println("[SUBMIT] Test submitted");
     _sendOk();
 }
 
 void WebServerHandler::_handleApiSyncAns() {
-    if (_srv.hasArg("val") && gState.currentIndex >= 0) {
+    if (_srv.hasArg("val") && gState.questionCounter >= 0) {
         String val = _srv.arg("val");
-        gState.interactions[gState.currentIndex].selectedOption = val;
-        Serial.println("[SYNC] Answer for Q" + String(gState.currentIndex + 1) + " set to " + val);
+        gState.interactions[gState.questionCounter].selectedOption = val;
+        // In adaptive mode, selecting an option via sync (from browser) should also trigger branch
+        if (gState.mode == MODE_MCQ) {
+            gState.handleMCQ(val[0]);
+        }
+        Serial.println("[SYNC] Answer for adaptive Q set to " + val);
     }
     _sendOk();
 }

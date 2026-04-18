@@ -1,12 +1,11 @@
 #pragma once
 // =============================================================
-//  test_state.h — Central test state machine
+//  test_state.h — Adaptive test state machine
 //  Shared between hardware drivers and web server.
-//  Owns the canonical system state so all modules read/write
-//  the same data without circular dependencies.
 // =============================================================
 
 #include <Arduino.h>
+#include <ArduinoJson.h>
 
 // ---- Question type enum ----------------------------------
 enum QuestionType { Q_MCQ, Q_NUMERIC, Q_VOICE, Q_UNKNOWN };
@@ -24,21 +23,22 @@ enum SystemMode {
 
 // ---- Touch stage (for voice multi-stage) -----------------
 enum TouchStage {
-    TOUCH_NONE,       // Idle / no active sequence
-    TOUCH_REC_START,  // First touch → browser starts recording
-    TOUCH_REC_STOP,   // Second touch → browser stops recording
-    TOUCH_CONFIRMED   // Third touch → confirmed, move on
+    TOUCH_NONE,
+    TOUCH_REC_START,
+    TOUCH_REC_STOP,
+    TOUCH_CONFIRMED
 };
 
 // ---- Interaction record for one question -----------------
 struct QuestionInteraction {
-    unsigned long startTimeMs;        // when question was shown
-    unsigned long firstInputTimeMs;   // when first keypress/touch happened
-    unsigned long submitTimeMs;       // when answer was confirmed
-    String selectedOption;            // MCQ: "A"/"B"/"C"/"D"
-    String numericValue;              // NUMERIC: accumulated digits
-    bool voiceRecorded;               // VOICE: did browser record?
+    unsigned long startTimeMs;
+    unsigned long firstInputTimeMs;
+    unsigned long submitTimeMs;
+    String selectedOption;
+    String numericValue;
+    bool voiceRecorded;
     bool answered;
+    String questionType;
 };
 
 // =============================================================
@@ -46,10 +46,20 @@ struct QuestionInteraction {
 // =============================================================
 class TestState {
 public:
-    // ---- Question metadata set from browser JSON ----------
-    int         totalQuestions = 0;
-    int         currentIndex   = -1;   // -1 = not started
-    QuestionType questionTypes[50];     // max 50 questions
+    // ---- Adaptive Tree Engine -----------------------------
+    DynamicJsonDocument* quizDoc = nullptr;
+    JsonObject currentNode;
+    int questionCounter = 0; 
+    int rootIndex = 0;       // tracks progress in the top-level JSON array
+    
+    // Metadata for backend sync
+    String quizId = "";
+    String quizTitle = "";
+
+    // ---- History Stack (Back-navigation) -----------------
+    JsonObject history[100];
+    int        historyTitleIndices[100]; // rootIndex history
+    int        historyTop = -1;
 
     // ---- Mode & input tracking ----------------------------
     SystemMode  mode      = MODE_IDLE;
@@ -73,45 +83,139 @@ public:
     unsigned long timerStartMs = 0;
     unsigned int  elapsedSec   = 0;
 
-    // ---- Per-question interaction -------------------------
-    QuestionInteraction interactions[50];
+    // ---- Interactions (History) ---------------------------
+    QuestionInteraction interactions[100]; // increased for branching paths
 
     // ---- Methods ------------------------------------------
 
     void setReady() {
         mode = MODE_READY;
-        currentIndex = -1;
         studentRoll = "";
         timerRunning = false;
+        questionCounter = 0;
+        rootIndex = 0;
+        historyTop = -1;
+        if (quizDoc) {
+            if (quizDoc->is<JsonArray>()) {
+                currentNode = (*quizDoc)[0];
+            } else {
+                JsonObject root = quizDoc->as<JsonObject>();
+                if (root.containsKey("questions") && root["questions"].is<JsonArray>()) {
+                    currentNode = root["questions"][0];
+                } else {
+                    currentNode = root;
+                }
+            }
+        }
     }
 
     void resetToIdle() {
         mode = MODE_IDLE;
-        currentIndex = -1;
-        totalQuestions = 0;
         studentRoll = "";
         numInput = "";
+        quizId = "";
+        quizTitle = "";
         timerRunning = false;
-        for (int i=0; i<50; i++) clearInteraction(i);
+        questionCounter = 0;
+        rootIndex = 0;
+        historyTop = -1;
+        if (quizDoc) {
+            delete quizDoc;
+            quizDoc = nullptr;
+        }
+        for (int i=0; i<100; i++) clearInteraction(i);
+    }
+
+    void loadQuiz(const String& json) {
+        if (quizDoc) delete quizDoc;
+        // Allocate buffer for the tree. Tree can be nested, so provide enough space.
+        quizDoc = new DynamicJsonDocument(8192); 
+        DeserializationError err = deserializeJson(*quizDoc, json);
+        if (err) {
+            Serial.printf("[STATE] JSON Load Error: %s\n", err.c_str());
+            delete quizDoc;
+            quizDoc = nullptr;
+        } else {
+            rootIndex = 0;
+            quizId = "";
+            quizTitle = "";
+
+            if (quizDoc->is<JsonArray>()) {
+                currentNode = (*quizDoc)[0];
+            } else {
+                JsonObject root = quizDoc->as<JsonObject>();
+                if (root.containsKey("id")) quizId = root["id"].as<String>();
+                if (root.containsKey("quizId")) quizId = root["quizId"].as<String>(); // fallback
+                if (root.containsKey("title")) quizTitle = root["title"].as<String>();
+
+                if (root.containsKey("questions") && root["questions"].is<JsonArray>()) {
+                    currentNode = root["questions"][0];
+                } else {
+                    currentNode = root;
+                }
+            }
+            Serial.printf("[STATE] Quiz Loaded: %s (ID: %s)\n", quizTitle.c_str(), quizId.c_str());
+        }
     }
 
     void startTest() {
-        // First "question" is roll input
         mode = MODE_ROLL;
-        currentIndex = 0;
         numInput = "";
+        questionCounter = 0;
+        rootIndex = 0;
         resetTimer();
         clearInteraction(0);
         Serial.println("[STATE] Starting Roll Input Phase");
     }
 
     void startActualQuestions() {
-        currentIndex = 0;
-        if (totalQuestions > 0) {
-            applyModeForCurrentQuestion();
+        if (quizDoc && !currentNode.isNull()) {
+            questionCounter = 0;
+            rootIndex = 0;
+            // Initialize currentNode to the first question if it's an array
+            if (quizDoc->is<JsonArray>()) {
+                currentNode = (*quizDoc)[0];
+            }
+            applyModeForNode(currentNode);
+            numInput = ""; // Clear roll number accumulator for actual questions
             resetTimer();
         } else {
             mode = MODE_DONE;
+        }
+    }
+
+    void handleMCQ(char key) {
+        if (mode != MODE_MCQ) return;
+        int optIdx = key - 'A';
+        JsonArray options = currentNode["options"].as<JsonArray>();
+        
+        if (optIdx >= 0 && optIdx < (int)options.size()) {
+            interactions[questionCounter].selectedOption = String(key);
+            interactions[questionCounter].submitTimeMs = millis();
+            interactions[questionCounter].answered = true;
+            interactions[questionCounter].questionType = "MCQ";
+            
+            JsonVariant opt = options[optIdx];
+            // Check if option is an object with a followUp
+            if (opt.is<JsonObject>()) {
+                JsonObject optObj = opt.as<JsonObject>();
+                if (!optObj["followUp"].isNull()) {
+                    Serial.printf("[BRANCH] Moving to MCQ option %c follow-up\n", key);
+                    currentNode = optObj["followUp"].as<JsonObject>();
+                    advanceToNextNode();
+                    return;
+                }
+            }
+            
+            // If no follow-up at the option level, check if the question node has a generic follow-up
+            if (!currentNode["followUp"].isNull()) {
+                Serial.println("[BRANCH] Moving to question-level follow-up");
+                currentNode = currentNode["followUp"].as<JsonObject>();
+                advanceToNextNode();
+            } else {
+                // Return to root array
+                moveToNextRoot();
+            }
         }
     }
 
@@ -119,97 +223,117 @@ public:
         if (mode == MODE_ROLL) {
             studentRoll = numInput;
             Serial.println("[STATE] Roll confirmed: " + studentRoll);
+            historyTop = -1; // Reset history for actual start
             startActualQuestions();
             return;
         }
 
-        if (currentIndex < totalQuestions - 1) {
-            currentIndex++;
-            applyModeForCurrentQuestion();
-            resetTimer();
-            // Restore answer if exists, otherwise clear
-            if (interactions[currentIndex].answered) {
-                if (mode == MODE_NUM) numInput = interactions[currentIndex].numericValue;
-                else numInput = ""; 
+        if (mode == MODE_MCQ || mode == MODE_NUM || mode == MODE_VOICE) {
+            interactions[questionCounter].submitTimeMs = millis();
+            interactions[questionCounter].answered = true;
+            
+            if (mode == MODE_MCQ) {
+                interactions[questionCounter].questionType = "MCQ";
+                // If skipping MCQ via nextQuestion (#), we don't change selectedOption (stays "")
+            } else if (mode == MODE_NUM) {
+                interactions[questionCounter].questionType = "NUM";
+                interactions[questionCounter].numericValue = numInput;
             } else {
-                numInput = ""; 
-                clearInteraction(currentIndex);
+                interactions[questionCounter].questionType = "VOICE";
             }
-        } else if (currentIndex == totalQuestions - 1) {
-            // Move to the final "Ready to Submit" review screen
-            currentIndex = totalQuestions;
-            mode = MODE_READY; 
-            numInput = "";
-            Serial.println("[STATE] All questions answered. Entering final review state.");
+
+            if (!currentNode["followUp"].isNull()) {
+                Serial.println("[BRANCH] Moving to question follow-up");
+                currentNode = currentNode["followUp"].as<JsonObject>();
+                advanceToNextNode();
+            } else {
+                moveToNextRoot();
+            }
         }
     }
 
-    void prevQuestion() {
-        if (mode == MODE_ROLL) return;
-        
-        if (currentIndex > 0) {
-            currentIndex--;
-            applyModeForCurrentQuestion();
-            resetTimer();
-            // Restore previous input
-            if (mode == MODE_NUM) {
-                numInput = interactions[currentIndex].numericValue;
-            } else {
-                numInput = ""; 
+    void moveToNextRoot() {
+        if (quizDoc && quizDoc->is<JsonArray>()) {
+            JsonArray arr = quizDoc->as<JsonArray>();
+            rootIndex++;
+            if (rootIndex < (int)arr.size()) {
+                Serial.printf("[ENGINE] Advancing to root question %d\n", rootIndex);
+                currentNode = arr[rootIndex];
+                advanceToNextNode();
+                return;
             }
-        } else if (currentIndex == 0) {
-            mode = MODE_ROLL;
-            numInput = studentRoll;
+        }
+        Serial.println("[ENGINE] Reached end of root array");
+        finishTest();
+    }
+
+    void advanceToNextNode() {
+        // Push current node to history BEFORE moving
+        if (historyTop < 99) {
+            historyTop++;
+            history[historyTop] = currentNode;
+            historyTitleIndices[historyTop] = rootIndex;
+        }
+
+        questionCounter++;
+        numInput = "";
+        applyModeForNode(currentNode);
+        resetTimer();
+        if (questionCounter < 100) {
+            clearInteraction(questionCounter);
+        }
+    }
+
+    void finishTest() {
+        mode = MODE_DONE;
+        timerRunning = false;
+        Serial.println("[STATE] Test Complete");
+    }
+
+    void prevQuestion() {
+        if (historyTop >= 0) {
+            Serial.printf("[ENGINE] Back-nav: Popping history (%d)\n", historyTop);
+            currentNode = history[historyTop];
+            rootIndex = historyTitleIndices[historyTop];
+            historyTop--;
+            
+            if (questionCounter > 0) questionCounter--;
+            
+            numInput = "";
+            applyModeForNode(currentNode);
             resetTimer();
+            
+            // Note: We don't clear the interaction for the question we just went back to,
+            // so if they select something new, it will overwrite.
+        } else {
+            Serial.println("[STATE] At first question, cannot go back");
         }
     }
 
     void backspace() {
         if (numInput.length() > 0) {
             numInput.remove(numInput.length() - 1);
-            if (isActive()) {
-                if (mode == MODE_NUM) {
-                    interactions[currentIndex].numericValue = numInput;
-                }
+            if (isActive() && mode == MODE_NUM) {
+                interactions[questionCounter].numericValue = numInput;
             }
         }
     }
 
     void submitTest() {
-        mode = MODE_DONE;
-        timerRunning = false;
-        Serial.println("[STATE] Test Submitted and Completed");
+        finishTest();
     }
 
     bool isActive() const {
-        if (mode == MODE_READY && currentIndex == totalQuestions) return true;
         return (mode == MODE_MCQ || mode == MODE_NUM || mode == MODE_VOICE || mode == MODE_ROLL);
     }
 
     bool isDone() const { return mode == MODE_DONE; }
 
     void recordFirstInput() {
-        if (isActive() && currentIndex >= 0 && currentIndex < 50) {
-            if (interactions[currentIndex].firstInputTimeMs == 0) {
-                interactions[currentIndex].firstInputTimeMs = millis();
+        if (isActive() && questionCounter >= 0 && questionCounter < 100) {
+            if (interactions[questionCounter].firstInputTimeMs == 0) {
+                interactions[questionCounter].firstInputTimeMs = millis();
             }
-        }
-    }
-
-    void submitCurrent() {
-        if (mode == MODE_ROLL) {
-            nextQuestion();
-            return;
-        }
-        if (!isActive()) return;
-        interactions[currentIndex].submitTimeMs = millis();
-        interactions[currentIndex].answered = true;
-        
-        // Auto-advance if not the last question
-        if (currentIndex < totalQuestions - 1) {
-            nextQuestion();
-        } else {
-            Serial.println("[STATE] Last question confirmed. Waiting for Submit Trigger (0)");
         }
     }
 
@@ -218,10 +342,6 @@ public:
         timerRunning  = true;
         elapsedSec    = 0;
         touchStage    = TOUCH_NONE;
-        if (mode != MODE_ROLL) {
-             // In NUM mode, we might restore answer, so don't always clear numInput here
-             // It's handled in next/prev methods
-        }
     }
 
     void updateTimer() {
@@ -230,13 +350,11 @@ public:
         if (s != elapsedSec) elapsedSec = s;
     }
 
-    // Emit a touch event for the browser to consume
     void fireTouchEvent(TouchStage stage) {
         touchEvent   = true;
         touchPayload = stage;
     }
 
-    // Consume pending key (called from web server poll handler)
     char consumeKey() {
         char k = pendingKey;
         pendingKey = 0;
@@ -244,7 +362,6 @@ public:
         return k;
     }
 
-    // Consume touch event
     TouchStage consumeTouch() {
         TouchStage s = touchPayload;
         touchEvent  = false;
@@ -253,21 +370,30 @@ public:
     }
 
 private:
-    void applyModeForCurrentQuestion() {
-        if (currentIndex < 0 || currentIndex >= totalQuestions) return;
-        switch (questionTypes[currentIndex]) {
-            case Q_MCQ:     mode = MODE_MCQ;   break;
-            case Q_NUMERIC: mode = MODE_NUM;   break;
-            case Q_VOICE:   mode = MODE_VOICE; break;
-            default:        mode = MODE_IDLE;  break;
+    void applyModeForNode(JsonObject node) {
+        if (node.isNull()) {
+            mode = MODE_DONE;
+            return;
         }
-        interactions[currentIndex].startTimeMs = millis();
+        String type = node["type"] | "unknown";
+        Serial.println("[ENGINE] Current Question Type: " + type);
+        
+        if (type == "mcq")      mode = MODE_MCQ;
+        else if (type == "numeric") mode = MODE_NUM;
+        else if (type == "voice")   mode = MODE_VOICE;
+        else                        mode = MODE_DONE;
+
+        if (questionCounter < 100) {
+            interactions[questionCounter].startTimeMs = millis();
+            interactions[questionCounter].questionType = type;
+        }
     }
 
     void clearInteraction(int idx) {
-        interactions[idx] = {millis(), 0, 0, "", "", false, false};
+        if (idx < 100) {
+            interactions[idx] = {millis(), 0, 0, "", "", false, false, ""};
+        }
     }
 };
 
-// Global singleton — defined in test_state.cpp, extern'd everywhere
 extern TestState gState;

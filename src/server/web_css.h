@@ -62,8 +62,10 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
 .btn-warn{background:linear-gradient(135deg,var(--warn),#e17055);color:#000;}
 .btn-blk{width:100%;justify-content:center;}
 .btn-lg{padding:15px 30px;font-size:1em;border-radius:var(--rad);}
+.btn-sm{padding:7px 14px;font-size:.78em;border-radius:var(--rad2);}
 .btn:disabled{opacity:.38;cursor:not-allowed;transform:none!important;box-shadow:none!important;}
 .row{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;}
+.debug-row{border-top:1px solid var(--bdr);padding-top:12px;margin-top:20px!important;justify-content:center;opacity:0.6;}
 
 /* ===================== PROGRESS ===================== */
 .prog-bar{height:5px;background:var(--s2);border-radius:3px;overflow:hidden;margin:8px 0;}

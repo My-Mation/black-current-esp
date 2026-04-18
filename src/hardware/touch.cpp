@@ -42,65 +42,33 @@ void TouchHandler::_handleTouch() {
     }
 
     gBuzzer.beepKey();
-
     SystemMode m = gState.mode;
 
-    // -------------------------------------------------------
-    //  MCQ: single touch = confirm selected option
-    // -------------------------------------------------------
     if (m == MODE_MCQ) {
-        String sel = gState.interactions[gState.currentIndex].selectedOption;
-        if (sel.length() == 0) {
-            // Adaptive logic: if we have numeric input instead of an MCQ option,
-            // process it as a numeric confirmation to avoid getting stuck.
-            if (gState.numInput.length() > 0) {
-                Serial.printf("[TOUCH] Adaptive: Confirming NUM (%s) in MCQ mode\n", gState.numInput.c_str());
-                gBuzzer.beepConfirm();
-                gState.interactions[gState.currentIndex].numericValue = gState.numInput;
-                gState.submitCurrent();
-                gState.fireTouchEvent(TOUCH_CONFIRMED);
-                return;
-            }
-            // Truly no option chosen — flash but don't advance
+        // In MCQ, selecting an option already transitions immediately.
+        // Touch can be an alternative confirm if the keypad logic was missed.
+        String sel = gState.interactions[gState.questionCounter].selectedOption;
+        if (sel.length() > 0) {
+            gBuzzer.beepConfirm();
+            gState.handleMCQ(sel[0]); 
+            gState.fireTouchEvent(TOUCH_CONFIRMED);
+        } else {
             Serial.println("[TOUCH] MCQ – no option selected yet");
-            gBuzzer.beepConfirm();
-            return;
         }
-        gBuzzer.beepConfirm();
-        gState.submitCurrent();
-        gState.fireTouchEvent(TOUCH_CONFIRMED);
-        Serial.printf("[TOUCH] MCQ confirmed: %s\n", sel.c_str());
     }
-
-    // -------------------------------------------------------
-    //  NUM: single touch = confirm numeric buffer
-    // -------------------------------------------------------
-    else if (m == MODE_NUM) {
-        if (gState.numInput.length() == 0) {
-            Serial.println("[TOUCH] NUM – no digits entered yet");
+    else if (m == MODE_NUM || m == MODE_ROLL) {
+        if (gState.numInput.length() > 0) {
             gBuzzer.beepConfirm();
-            return;
+            gState.nextQuestion();
+            gState.fireTouchEvent(TOUCH_CONFIRMED);
+        } else {
+            Serial.println("[TOUCH] No digits entered yet");
         }
-        gBuzzer.beepConfirm();
-        gState.interactions[gState.currentIndex].numericValue = gState.numInput;
-        gState.submitCurrent();
-        gState.fireTouchEvent(TOUCH_CONFIRMED);
-        Serial.printf("[TOUCH] NUM confirmed: %s\n", gState.numInput.c_str());
     }
-
-    // -------------------------------------------------------
-    //  VOICE: touch sensor = confirm recording (submission)
-    // -------------------------------------------------------
     else if (m == MODE_VOICE) {
         gBuzzer.beepConfirm();
+        gState.nextQuestion();
         gState.fireTouchEvent(TOUCH_CONFIRMED);
         Serial.println("[TOUCH] VOICE confirm triggered");
-    }
-    else if (m == MODE_READY && gState.currentIndex == gState.totalQuestions) {
-        // Final Submission Trigger
-        gBuzzer.beepConfirm();
-        gState.submitTest();
-        gState.fireTouchEvent(TOUCH_CONFIRMED);
-        Serial.println("[TOUCH] Final Test submission triggered");
     }
 }

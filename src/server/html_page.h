@@ -19,6 +19,7 @@ const char HTML_PART1[] PROGMEM = R"rawliteral(
 
 const char HTML_PART2[] PROGMEM = R"rawliteral(
 </style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/lamejs/1.2.1/lame.min.js"></script>
 </head>
 <body>
 <div class="wrap">
@@ -38,16 +39,32 @@ const char HTML_PART2[] PROGMEM = R"rawliteral(
 <!-- =========== CONTROL CARD =========== -->
 <div class="card" id="ctrlCard">
   <div class="card-ttl">🎮 Control Panel</div>
-  <p class="prog-lbl" id="progLbl">No questions loaded — use Load or Auto-Generate</p>
+  <p class="prog-lbl" id="progLbl">No questions loaded — use the button below or press 0 on keypad</p>
   <div class="prog-bar"><div class="prog-fill" id="progFill" style="width:0%"></div></div>
   <div class="timer" id="timerDisp">00:00</div>
   <div class="row" style="margin-top:12px;">
-    <button class="btn btn-p btn-lg btn-blk" id="btnStart" disabled>🚀 Test Starter</button>
+    <button class="btn btn-p btn-lg btn-blk" id="btnFetchRemote">📡 Get Data from Server</button>
   </div>
-  <div class="row">
-    <button class="btn btn-s" id="btnLoad">📋 Load Questions</button>
-    <button class="btn btn-s" id="btnAuto">⚡ Auto-Generate</button>
+  <div id="fetchStatus" class="prog-lbl" style="text-align:center; margin-top:5px; font-weight:bold; color:var(--acc2);">Status: Idle</div>
+  
+  <div class="row" style="margin-top:12px;">
+    <button class="btn btn-ok btn-lg btn-blk" id="btnStart" disabled>🚀 Start Test</button>
+  </div>
+  <div class="row debug-row">
+    <button class="btn btn-s btn-sm" id="btnLoad">📋 Manual JSON (Debug)</button>
+    <button class="btn btn-s btn-sm" id="btnAuto">⚡ Auto-Generate</button>
     <button class="btn btn-err hidden" id="btnSubmit">📤 Submit Test</button>
+  </div>
+</div>
+
+<!-- =========== SERVER CONFIG CARD =========== -->
+<div class="card" id="configCard">
+  <div class="card-ttl">⚙️ Server Configuration</div>
+  <p class="prog-lbl">Set the remote question server address</p>
+  <input type="text" class="json-area" id="serverIpIn" style="min-height:45px; margin-bottom:10px;" placeholder="e.g. 192.168.1.10:3000">
+  <div id="saveStatus" class="prog-lbl" style="text-align:center; margin-bottom:10px; font-weight:bold; color:var(--ok);"></div>
+  <div class="row">
+    <button class="btn btn-p btn-blk" id="btnSaveConfig">💾 Save & Apply</button>
   </div>
 </div>
 
@@ -140,6 +157,14 @@ const char HTML_PART2[] PROGMEM = R"rawliteral(
   </div>
   <div id="uploadStatus" class="prog-lbl" style="margin-top:10px; text-align:center; color:var(--p1); font-weight:bold;"></div>
   <div id="resBody"></div>
+  </div>
+</div>
+
+<!-- =========== GLOBAL ACTIONS =========== -->
+<div class="wrap" style="padding-top:0;">
+  <div id="endQuizContainer" class="hidden">
+    <button class="btn btn-err btn-blk" id="btnEndQuiz">🛑 End Quiz & View Results</button>
+  </div>
 </div>
 
 </div><!-- /wrap -->
