@@ -86,7 +86,7 @@ void setup() {
         xTaskCreatePinnedToCore(
             Core0Task,         // Task function
             "WebServerTask",   // Name
-            8192,              // Stack size (increased for JSON/HTTP)
+            10240,             // Stack size (increased for JSON/HTTP)
             NULL,              // Parameters
             1,                 // Priority
             &Core0TaskHandle,  // Task handle

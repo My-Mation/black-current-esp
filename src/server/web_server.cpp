@@ -44,15 +44,18 @@ void WebServerHandler::beginServer() {
 
     _srv.on("/",                  HTTP_GET,  [this](){ _handleRoot(); });
     _srv.on("/api/state",         HTTP_GET,  [this](){ _handleApiState(); });
+    _srv.on("/api/state",         HTTP_OPTIONS,[this](){ _handleCors(); });
     _srv.on("/api/mode",          HTTP_GET,  [this](){ _handleApiMode(); });
     _srv.on("/api/start_test",    HTTP_GET,  [this](){ _handleApiStartTest(); });
     _srv.on("/api/next_question", HTTP_GET,  [this](){ _handleApiNextQuestion(); });
     _srv.on("/api/sync_ans",      HTTP_GET,  [this](){ _handleApiSyncAns(); });
+    _srv.on("/api/sync_ans",      HTTP_OPTIONS,[this](){ _handleCors(); });
     _srv.on("/api/reset_voice",   HTTP_GET,  [this](){ _handleApiResetVoice(); });
     _srv.on("/api/load_questions",HTTP_POST, [this](){ _handleApiLoadQuestions(); });
     _srv.on("/api/load_questions",HTTP_OPTIONS,[this](){ _handleCors(); });
     _srv.on("/api/get_questions",   HTTP_GET,  [this](){ _handleApiGetQuestions(); });
     _srv.on("/api/submit",          HTTP_GET,  [this](){ _handleApiSubmit(); });
+    _srv.on("/api/submit",          HTTP_OPTIONS,[this](){ _handleCors(); });
     _srv.on("/api/upload_audio",    HTTP_POST, [this](){ _handleApiUploadAudio(); });
     _srv.on("/api/upload_audio",    HTTP_OPTIONS,[this](){ _handleCors(); });
     _srv.onNotFound([this](){ _handleNotFound(); });
@@ -87,8 +90,10 @@ void WebServerHandler::_sendOk() {
 void WebServerHandler::_handleRoot() {
     // Content-Security-Policy: allow media (mic) from same origin
     _srv.sendHeader("Content-Security-Policy",
-        "default-src 'self' 'unsafe-inline' https://fonts.googleapis.com "
-        "https://fonts.gstatic.com; media-src 'self' mediastream: blob:;");
+        "default-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://fonts.gstatic.com; "
+        "script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; "
+        "media-src 'self' mediastream: blob:; "
+        "connect-src 'self' *;");
     
     // Send in chunks to save RAM and handle large split files
     _srv.setContentLength(CONTENT_LENGTH_UNKNOWN);
@@ -102,8 +107,8 @@ void WebServerHandler::_handleRoot() {
 }
 
 void WebServerHandler::_handleApiState() {
-    // Build JSON state snapshot each poll
-    StaticJsonDocument<8192> doc;
+    // Use heap instead of stack to avoid crash (Dynamic vs Static)
+    DynamicJsonDocument doc(8192); 
 
     // Pending key (consumed — one-shot)
     if (gState.keyReady) {
@@ -152,7 +157,16 @@ void WebServerHandler::_handleApiState() {
     
     // Send current interaction data for real-time sync
     if (gState.questionCounter >= 0 && gState.questionCounter < 100) {
-        doc["sel"] = gState.interactions[gState.questionCounter].selectedOption;
+        if (gState.mode == MODE_MCQ) {
+            doc["sel"] = gState.interactions[gState.questionCounter].selectedOption;
+        }
+
+        // Include last answer for robust browser sync during transitions
+        if (gState.questionCounter > 0) {
+            const auto& prev = gState.interactions[gState.questionCounter - 1];
+            if (prev.selectedOption != "") doc["prevSel"] = prev.selectedOption;
+            if (prev.numericValue != "")   doc["prevNum"] = prev.numericValue;
+        }
         doc["num"] = gState.interactions[gState.questionCounter].numericValue;
     }
     
@@ -246,53 +260,150 @@ void WebServerHandler::_handleApiSubmit() {
     _sendOk();
 }
 
+// ------------------------------------------------------------------
+//  Build and send a multipart/form-data request to the backend.
+//  We manually assemble the body because ESP32's HTTPClient has no
+//  built-in multipart builder.
+// ------------------------------------------------------------------
+static const char* BOUNDARY = "----ESP32Boundary7Ma";
+
+// Helper: append a text field to the multipart body
+static void _appendTextField(String& body, const char* fieldName, const String& value) {
+    body += "--";
+    body += BOUNDARY;
+    body += "\r\nContent-Disposition: form-data; name=\"";
+    body += fieldName;
+    body += "\"\r\n\r\n";
+    body += value;
+    body += "\r\n";
+}
+
 void WebServerHandler::sendResultsToServer() {
-    if (WiFi.status() != WL_CONNECTED) {
-        Serial.println("[SYNC] No WiFi, cannot send results.");
-        return;
+    Serial.printf("[SYNC] Starting submission. Free Heap: %d bytes\n", ESP.getFreeHeap());
+    
+    if (gState.quizId == "" || gState.studentRoll == "") {
+        Serial.println("[SYNC] WARNING: Quiz ID or Roll Number is empty! Submission might fail.");
     }
 
-    // Build JSON payload
-    DynamicJsonDocument doc(16384); 
-    doc["quizId"] = gState.quizId;
-    doc["rollNumber"] = gState.studentRoll;
-    doc["timestamp"] = millis();
+    // ── 1. Build JSON answers array ─────────────────────────────
+    // backend expects: [{"answer": "...", "followUpAnswer": "..."}, ...]
+    // where index i corresponds to the root question index i.
+    DynamicJsonDocument ansDoc(12288);
+    JsonArray ansArr = ansDoc.to<JsonArray>();
 
-    JsonArray results = doc.createNestedArray("interactions");
-    for (int i = 0; i <= gState.questionCounter; i++) {
-        if (!gState.interactions[i].answered) continue;
-        
-        JsonObject obj = results.createNestedObject();
-        obj["qIdx"] = i;
-        obj["type"] = gState.interactions[i].questionType;
-        obj["sel"] = gState.interactions[i].selectedOption;
-        obj["num"] = gState.interactions[i].numericValue;
-        obj["timeTaken"] = (gState.interactions[i].submitTimeMs - gState.interactions[i].startTimeMs) / 1000;
-    }
-
-    String payload;
-    serializeJson(doc, payload);
-
-    // Send to backend
-    HTTPClient http;
-    http.begin(SUBMIT_URL);
-    http.addHeader("Content-Type", "application/json");
-
-    Serial.println("[SYNC] Sending results to: " + String(SUBMIT_URL));
-    int httpCode = http.POST(payload);
-
-    if (httpCode > 0) {
-        Serial.printf("[SYNC] Results sent, code: %d\n", httpCode);
-        if (httpCode == 200) {
-            gOled.showStatus("Sync Success", "Results Posted");
-        } else {
-            gOled.showStatus("Sync Error", String("Code: ") + httpCode);
-        }
+    // Determine max rootIndex from current quiz if available, else use questionCounter
+    int totalRootQuestions = 0;
+    if (gState.quizDoc && gState.quizDoc->is<JsonArray>()) {
+        totalRootQuestions = gState.quizDoc->as<JsonArray>().size();
     } else {
-        Serial.printf("[SYNC] POST failed: %s\n", http.errorToString(httpCode).c_str());
-        gOled.showStatus("Sync Failed", "Server Unreachable");
+        // Fallback to searching interactions
+        for (int i = 0; i < 100; i++) {
+            if (gState.interactions[i].rootIdx >= totalRootQuestions) {
+                totalRootQuestions = gState.interactions[i].rootIdx + 1;
+            }
+        }
     }
-    http.end();
+
+    // Initialize array with null objects
+    for (int i = 0; i < totalRootQuestions; i++) {
+        JsonObject obj = ansArr.createNestedObject();
+        obj["answer"] = (char*)nullptr;
+        obj["followUpAnswer"] = (char*)nullptr;
+    }
+
+    // Populate from interactions
+    for (int i = 0; i < 100; i++) {
+        const auto& ia = gState.interactions[i];
+        if (!ia.answered || ia.rootIdx < 0 || ia.rootIdx >= totalRootQuestions) continue;
+
+        JsonObject obj = ansArr[ia.rootIdx];
+        String finalAns = "";
+        if (ia.selectedOption != "") finalAns = ia.selectedOption;
+        else if (ia.numericValue != "") finalAns = ia.numericValue;
+
+        if (!ia.isFollowUp) {
+            if (finalAns != "") obj["answer"] = finalAns;
+        } else {
+            if (finalAns != "") obj["followUpAnswer"] = finalAns;
+        }
+    }
+
+    String answersStr;
+    serializeJson(ansArr, answersStr);
+
+    // ── 2. Build Multipart Body ────────────────────────────────
+    String body = "";
+    body.reserve(answersStr.length() + 1024); 
+    
+    auto appendField = [&](const char* name, const String& val) {
+        body += "--"; body += BOUNDARY; body += "\r\n";
+        body += "Content-Disposition: form-data; name=\""; body += name; body += "\"\r\n\r\n";
+        body += val; body += "\r\n";
+    };
+
+    appendField("rollNumber", gState.studentRoll);
+    appendField("quizId",     gState.quizId);
+    appendField("answers",    answersStr);
+    
+    body += "--"; body += BOUNDARY; body += "--\r\n";
+
+    Serial.printf("[SYNC] Body built. Size: %d bytes. Free Heap: %d bytes\n", 
+                  body.length(), ESP.getFreeHeap());
+
+    // ── 3. Send to Server ───────────────────────────────────────
+    int httpCode = 0;
+    String responseBody = "";
+    const int MAX_RETRIES = 2;
+
+    for (int attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+        HTTPClient http;
+        http.begin(SUBMIT_URL);
+        http.setTimeout(10000); // 10s timeout
+        
+        String contentType = "multipart/form-data; boundary=";
+        contentType += BOUNDARY;
+        http.addHeader("Content-Type", contentType);
+
+        Serial.printf("[SYNC] POST to %s (attempt %d)\n", SUBMIT_URL, attempt + 1);
+        httpCode = http.POST((uint8_t*)body.c_str(), body.length());
+        
+        if (httpCode > 0) {
+            // Check size before allocating response string
+            int size = http.getSize();
+            if (size > 0 && size < 10240) {
+                responseBody = http.getString();
+            } else {
+                Serial.printf("[SYNC] Response too large or unknown: %d bytes\n", size);
+            }
+            http.end();
+            break; 
+        }
+        
+        http.end();
+        Serial.printf("[SYNC] Attempt %d failed. Code: %d\n", attempt + 1, httpCode);
+        if (attempt < MAX_RETRIES) delay(1000);
+    }
+
+    // ── 4. Handle Result ────────────────────────────────────────
+    Serial.printf("[SYNC] Final Result: %d. Free Heap: %d bytes\n", httpCode, ESP.getFreeHeap());
+
+    if (httpCode == 201) {
+        Serial.println("[SYNC] Submission Success (201).");
+        DynamicJsonDocument resDoc(512);
+        if (deserializeJson(resDoc, responseBody) == DeserializationError::Ok) {
+            int score = resDoc["score"] | -1;
+            int total = resDoc["totalQuestions"] | -1;
+            if (score >= 0) {
+                gOled.showStatus(("Score: " + String(score) + "/" + String(total)).c_str(), "Submit OK");
+            } else {
+                gOled.showStatus("Submitted!", "Score N/A");
+            }
+        }
+    } else if (httpCode > 0) {
+        gOled.showStatus("Submit Warn", ("Code: " + String(httpCode)).c_str());
+    } else {
+        gOled.showStatus("Submit Failed", "No Response");
+    }
 }
 
 void WebServerHandler::_handleApiSyncAns() {

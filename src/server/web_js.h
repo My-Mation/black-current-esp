@@ -93,7 +93,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Load saved IP (Default to hardcoded if none in storage)
   const savedIp = localStorage.getItem('backendIp');
   if(savedIp) $('serverIpIn').value = savedIp;
-  else $('serverIpIn').value = "10.30.233.173:3000";
+  else $('serverIpIn').value = "10.30.233.172:3000";
 
   startPoll();
 });
@@ -138,6 +138,11 @@ function onESPState(d){
   
   curQuizId = d.quizId || "";
   curQuizTitle = d.quizTitle || "";
+  
+  if (curQuizId) {
+      const btnStart = $('btnStart');
+      if (btnStart) btnStart.disabled = false;
+  }
 
   let prevEspSec = espSec;
   if(d.timer !== undefined){ espSec = d.timer; renderTimer(espSec); }
@@ -146,7 +151,7 @@ function onESPState(d){
   
   // Transition to ROLL automatically if mode changed to ROLL but test not active
   if(d.mode === 'ROLL' && !testActive) {
-      console.log("[AUTO-START] Transitioning to ROLL phase");
+      console.log("[AUTO-START] Transitioning to ROLL phase. d.mode:", d.mode, "testActive:", testActive);
       startActualTest(); 
   }
 
@@ -229,9 +234,10 @@ function saveCurrentAnswer(sec, val, rootIdx) {
 }
 
 function renderQuestion(mode, q){
+  console.log("[RENDER] Mode:", mode, "Question:", q ? (q.text || q.question) : "null");
   localStartTime = Date.now();
   if(mode === 'ROLL'){
-    hide('qCard'); hide('reviewCard'); hide('ctrlCard'); show('rollCard');
+    hide('qCard'); hide('reviewCard'); hide('ctrlCard'); hide('configCard'); show('rollCard');
     renderNum(mode, ""); return;
   }
   if(!q || mode === 'DONE') {
@@ -418,10 +424,11 @@ function updateVoiceUI(){
 //  SUBMISSION & RESULTS
 // ============================================================
 function startActualTest() {
-  testActive = true; curIndex = -1; curQDoc = null; answers = {}; voiceBlobs = {};
+  testActive = true; curIndex = -1; curQDoc = null; answers = {}; voiceBlobs = {}; lastInput = "";
   show('btnSubmit'); fetch('/api/start_test');
   renderQuestion('ROLL', null);
 }
+
 async function finalizeSubmission() {
   console.log("[SUBMIT] Finalizing quiz...");
   
@@ -433,44 +440,93 @@ async function finalizeSubmission() {
     await fetch('/api/mode?m=DONE');
   } catch(e) {}
   
-  // 1. Show results locally
+  // 1. Show results locally (preliminary)
   showResults();
 
-  // 2. Background sync to backend if configured
+  // 2. Background sync to backend
   const serverIp = $('serverIpIn').value.trim();
   if(!serverIp) return;
 
-  try {
-    const backendUrl = `http://${serverIp}/api/submit`;
-    const formData = new FormData();
-    formData.append('rollNumber', $('rollDisp').textContent || 'unknown');
-    formData.append('quizId', curQuizId || 'demo_quiz');
-    
-    const sortedKeys = Object.keys(answers).sort((a,b) => a-b);
-    const answersList = sortedKeys.map(k => ({
-        answer: answers[k].answer,
-        followUpAnswer: answers[k].followUpAnswer,
-        audioFile: answers[k].audioFile,
-        followUpAudioFile: answers[k].followUpAudioFile
-    }));
-    formData.append('answers', JSON.stringify(answersList));
+  const backendUrl = `http://${serverIp}/api/submit`;
+  const formData = new FormData();
+  formData.append('rollNumber', $('rollDisp').textContent || 'unknown');
+  formData.append('quizId', curQuizId || 'demo_quiz');
+  
+  // Format answers array EXACTLY as requested: {answer, followUpAnswer}
+  const sortedKeys = Object.keys(answers).sort((a,b) => a-b);
+  const answersList = sortedKeys.map(k => {
+      // Map "VOICE" placeholder to null string per contract "Voice -> answer = null"
+      const ans = answers[k].answer === "VOICE" ? null : answers[k].answer;
+      // Map follow-up if it's voice or null
+      let fAns = answers[k].followUpAnswer;
+      if (fAns === "VOICE_FOLLOWUP") fAns = null;
+      else if (!fAns) fAns = null;
 
-    // Attach voice recordings
-    Object.keys(voiceBlobs).forEach(key => {
-        const blob = voiceBlobs[key];
-        if (!blob) return;
-        const [rootIdx, type] = key.split('_');
-        const filename = type === 'm' ? `audio_q${rootIdx}.mp3` : `audio_q${rootIdx}_f.mp3`;
-        formData.append('audio', blob, filename);
-    });
+      return {
+          answer: ans,
+          followUpAnswer: fAns
+      };
+  });
+  formData.append('answers', JSON.stringify(answersList));
 
-    fetch(backendUrl, { method: 'POST', body: formData })
-      .then(r => console.log("[SUBMIT] Backend sync status:", r.status))
-      .catch(e => console.warn("[SUBMIT] Background sync failed:", e));
-  } catch(e) {
-    console.error("[SUBMIT] Sync error:", e);
+  // Attach audio files with required keys: audio_q{i} and audio_q{i}_f
+  Object.keys(voiceBlobs).forEach(key => {
+      const blob = voiceBlobs[key];
+      if (!blob) return;
+      const [rootIdx, type] = key.split('_');
+      const fieldName = type === 'm' ? `audio_q${rootIdx}` : `audio_q${rootIdx}_f`;
+      formData.append(fieldName, blob, `${fieldName}.mp3`);
+  });
+
+  // 3. Send with up to 2 retries
+  const MAX_RETRIES = 2;
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      console.log(`[SUBMIT] Attempt ${attempt + 1} to ${backendUrl}...`);
+      const response = await fetch(backendUrl, { 
+        method: 'POST', 
+        body: formData,
+        // Ensure no cache and let browser set boundary automatically
+      });
+
+      if (response.status === 201) {
+        const result = await response.json();
+        console.log("[SUBMIT] Success 201:", result);
+        
+        // Extract score/totalQuestions as per Task 7
+        const score = result.score !== undefined ? result.score : '?';
+        const total = result.totalQuestions !== undefined ? result.totalQuestions : '?';
+        
+        // Display on screen
+        $('scoreBig').textContent = score;
+        const msg = `Score: ${score} / ${total}`;
+        const statusEl = document.createElement('div');
+        statusEl.className = 'submit-status-banner success';
+        statusEl.textContent = `✅ Successfully Submitted! ${msg}`;
+        document.body.appendChild(statusEl);
+        
+        alert(`Test Submitted Successfully!\nScore: ${score} / ${total}`);
+        return; // Success
+      } else {
+        const errText = await response.text();
+        console.warn(`[SUBMIT] Server returned ${response.status}: ${errText}`);
+        if (attempt === MAX_RETRIES) throw new Error(`Server error: ${response.status}`);
+      }
+    } catch (e) {
+      console.error(`[SUBMIT] Attempt ${attempt + 1} failed:`, e);
+      if (attempt === MAX_RETRIES) {
+        alert("Fatal Error: Could not submit test after multiple attempts. Please check network.");
+        const statusEl = document.createElement('div');
+        statusEl.className = 'submit-status-banner error';
+        statusEl.textContent = `❌ Submission Failed after ${MAX_RETRIES + 1} attempts.`;
+        document.body.appendChild(statusEl);
+      }
+      // Wait a bit before retry
+      await new Promise(r => setTimeout(r, 2000));
+    }
   }
 }
+
 
 function showResults() {
     const resBody = $('resBody'); resBody.innerHTML = '';

@@ -10,8 +10,8 @@
 
 // ---- Web Server ------------------------------------------
 #define WEB_PORT           80
-#define REMOTE_SERVER_URL  "http://192.168.1.10:3000/questions" 
-#define SUBMIT_URL         "http://192.168.1.10:3000/submit"
+#define REMOTE_SERVER_URL  "http://10.30.233.173:3000/api/load_questions"
+#define SUBMIT_URL         "http://10.30.233.173:3000/api/submit"
 
 // ---- OLED (I2C SSD1306) ----------------------------------
 #define OLED_SDA    21

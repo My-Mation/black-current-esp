@@ -39,6 +39,8 @@ struct QuestionInteraction {
     bool voiceRecorded;
     bool answered;
     String questionType;
+    int rootIdx;        // Tracks which root question this belongs to
+    bool isFollowUp;    // Tracks if this was an adaptive branching node
 };
 
 // =============================================================
@@ -144,8 +146,10 @@ public:
                 currentNode = (*quizDoc)[0];
             } else {
                 JsonObject root = quizDoc->as<JsonObject>();
-                if (root.containsKey("id")) quizId = root["id"].as<String>();
-                if (root.containsKey("quizId")) quizId = root["quizId"].as<String>(); // fallback
+                if (root.containsKey("_id")) quizId = root["_id"].as<String>();
+                else if (root.containsKey("id")) quizId = root["id"].as<String>();
+                else if (root.containsKey("quizId")) quizId = root["quizId"].as<String>();
+                
                 if (root.containsKey("title")) quizTitle = root["title"].as<String>();
 
                 if (root.containsKey("questions") && root["questions"].is<JsonArray>()) {
@@ -176,7 +180,7 @@ public:
             if (quizDoc->is<JsonArray>()) {
                 currentNode = (*quizDoc)[0];
             }
-            applyModeForNode(currentNode);
+            applyModeForNode(currentNode, false);
             numInput = ""; // Clear roll number accumulator for actual questions
             resetTimer();
         } else {
@@ -202,7 +206,7 @@ public:
                 if (!optObj["followUp"].isNull()) {
                     Serial.printf("[BRANCH] Moving to MCQ option %c follow-up\n", key);
                     currentNode = optObj["followUp"].as<JsonObject>();
-                    advanceToNextNode();
+                    advanceToNextNode(true);
                     return;
                 }
             }
@@ -211,7 +215,7 @@ public:
             if (!currentNode["followUp"].isNull()) {
                 Serial.println("[BRANCH] Moving to question-level follow-up");
                 currentNode = currentNode["followUp"].as<JsonObject>();
-                advanceToNextNode();
+                advanceToNextNode(true);
             } else {
                 // Return to root array
                 moveToNextRoot();
@@ -245,7 +249,7 @@ public:
             if (!currentNode["followUp"].isNull()) {
                 Serial.println("[BRANCH] Moving to question follow-up");
                 currentNode = currentNode["followUp"].as<JsonObject>();
-                advanceToNextNode();
+                advanceToNextNode(true);
             } else {
                 moveToNextRoot();
             }
@@ -259,7 +263,7 @@ public:
             if (rootIndex < (int)arr.size()) {
                 Serial.printf("[ENGINE] Advancing to root question %d\n", rootIndex);
                 currentNode = arr[rootIndex];
-                advanceToNextNode();
+                advanceToNextNode(false);
                 return;
             }
         }
@@ -267,7 +271,7 @@ public:
         finishTest();
     }
 
-    void advanceToNextNode() {
+    void advanceToNextNode(bool followUp) {
         // Push current node to history BEFORE moving
         if (historyTop < 99) {
             historyTop++;
@@ -277,7 +281,7 @@ public:
 
         questionCounter++;
         numInput = "";
-        applyModeForNode(currentNode);
+        applyModeForNode(currentNode, followUp);
         resetTimer();
         if (questionCounter < 100) {
             clearInteraction(questionCounter);
@@ -300,7 +304,7 @@ public:
             if (questionCounter > 0) questionCounter--;
             
             numInput = "";
-            applyModeForNode(currentNode);
+            applyModeForNode(currentNode, interactions[questionCounter].isFollowUp);
             resetTimer();
             
             // Note: We don't clear the interaction for the question we just went back to,
@@ -370,7 +374,7 @@ public:
     }
 
 private:
-    void applyModeForNode(JsonObject node) {
+    void applyModeForNode(JsonObject node, bool followUp) {
         if (node.isNull()) {
             mode = MODE_DONE;
             return;
@@ -386,12 +390,14 @@ private:
         if (questionCounter < 100) {
             interactions[questionCounter].startTimeMs = millis();
             interactions[questionCounter].questionType = type;
+            interactions[questionCounter].rootIdx = rootIndex;
+            interactions[questionCounter].isFollowUp = followUp;
         }
     }
 
     void clearInteraction(int idx) {
         if (idx < 100) {
-            interactions[idx] = {millis(), 0, 0, "", "", false, false, ""};
+            interactions[idx] = {millis(), 0, 0, "", "", false, false, "", -1, false};
         }
     }
 };

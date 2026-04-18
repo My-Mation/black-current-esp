@@ -174,6 +174,12 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 @keyframes fa{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
 .hidden{display:none!important;}
 
+/* ===================== STATUS BANNER ===================== */
+.submit-status-banner{padding:12px 18px;border-radius:var(--rad2);margin-top:16px;
+  font-size:.85em;font-weight:600;text-align:center;animation:fa .3s ease;}
+.submit-status-banner.success{background:rgba(61,168,122,.15);border:1px solid var(--ok);color:var(--ok);}
+.submit-status-banner.error{background:rgba(192,57,43,.15);border:1px solid var(--err);color:var(--err);}
+
 /* ===================== RESPONSIVE ===================== */
 @media(max-width:480px){
   .opts{grid-template-columns:1fr;}
