@@ -19,9 +19,12 @@ let curIndex    = -1;     // sequence number from ESP
 let curMode     = 'IDLE';
 let curQuizId   = "";
 let curQuizTitle = "";
+let curTotalCount = 0;
 let curRootIndex = -1;
+let curIsFollowUp = false;
 let answers      = {};     // Keyed by rootIndex: { q, type, answer, followUpAnswer, audioFile, followUpAudioFile, time }
 let voiceBlobs  = {};     // Map by index
+let pendingEncodings = 0; // Tracks async MP3 conversion
 let testActive  = false;
 let testDone    = false;
 let pollId      = null;
@@ -138,6 +141,9 @@ function onESPState(d){
   
   curQuizId = d.quizId || "";
   curQuizTitle = d.quizTitle || "";
+  curTotalCount = d.total || 0;
+  curIsFollowUp = d.isFollowUp || false;
+  curRootIndex = d.rootIndex !== undefined ? d.rootIndex : curRootIndex;
   
   if (curQuizId) {
       const btnStart = $('btnStart');
@@ -147,9 +153,16 @@ function onESPState(d){
   let prevEspSec = espSec;
   if(d.timer !== undefined){ espSec = d.timer; renderTimer(espSec); }
 
-  if(d.mode === 'DONE' && testActive){ finalizeSubmission(); return; }
+  // Transition to DONE / Submit
+  if(d.mode === 'DONE' && testActive){ 
+      if (curQDoc && curIndex !== -1) {
+          const finalVal = lastInput || d.prevSel || d.prevNum || "";
+          saveCurrentAnswer(espSec, finalVal, curRootIndex);
+      }
+      finalizeSubmission(); 
+      return; 
+  }
   
-  // Transition to ROLL automatically if mode changed to ROLL but test not active
   if(d.mode === 'ROLL' && !testActive) {
       console.log("[AUTO-START] Transitioning to ROLL phase. d.mode:", d.mode, "testActive:", testActive);
       startActualTest(); 
@@ -169,10 +182,8 @@ function onESPState(d){
 
     if(d.index !== curIndex || d.mode !== curMode || (d.q && newText !== oldText)){
        if (curQDoc && curIndex !== -1) {
-           let finalVal = lastInput;
-           if (d.prevSel) finalVal = d.prevSel;
-           else if (d.prevNum) finalVal = d.prevNum;
-           
+           // Use prev values from ESP if available for perfect sync
+           let finalVal = d.prevSel || d.prevNum || lastInput;
            saveCurrentAnswer(prevEspSec, finalVal, curRootIndex);
        }
        curIndex = d.index;
@@ -273,10 +284,10 @@ function handleKey(key){
   if(curQDoc.type === 'voice'){
     if(key === '1') { voiceStage = 1; startRecording(); updateVoiceUI(); }
     if(key === '2') { voiceStage = 2; stopRecording(); updateVoiceUI(); }
-    if(key === '0' && voiceStage === 2) toggleLocalPlayback();
+    if(key === '0') toggleLocalPlayback();
     if(key.toUpperCase() === 'D' && voiceStage === 2) {
       voiceStage = 0; hide('voicePlayback'); updateVoiceUI();
-      const voiceKey = answers[curRootIndex]?.answer === "VOICE" ? `${curRootIndex}_f` : `${curRootIndex}_m`;
+      const voiceKey = curIsFollowUp ? `${curRootIndex}_f` : `${curRootIndex}_m`;
       voiceBlobs[voiceKey] = null; fetch('/api/reset_voice');
     }
   }
@@ -297,12 +308,19 @@ function buildMCQ(q){
   if (q.options) {
       q.options.forEach((opt, i) => {
           let text = typeof opt === 'object' ? opt.text : opt;
-          // Improved cleaning: remove "A) ", "A. ", "A " prefixes
           const cleanText = text.replace(/^[A-D][\)\.\s]\s*/i, '');
           const d = document.createElement('div');
           d.className = 'opt'; d.id = 'opt'+i;
           d.innerHTML = `<span class="opt-lbl">${labels[i]}</span><span>${cleanText}</span>`;
-          d.onclick = () => { renderMCQSelect(i); fetch('/api/sync_ans?val=' + labels[i]); };
+          d.onclick = () => { 
+              renderMCQSelect(i); 
+              // Predictive State: if this option has a followup, realize it before the poll return
+              if (typeof opt === 'object' && opt.followUp) {
+                  curIsFollowUp = true;
+                  console.log("[UI] Predictive: Moving to follow-up");
+              }
+              fetch('/api/sync_ans?val=' + labels[i]); 
+          };
           grid.appendChild(d);
       });
   }
@@ -336,25 +354,33 @@ async function startRecording(){
         }
     }
     
+    // Snapshot the current question indexing to prevent race conditions during async encoding
+    const snapRootIdx = curRootIndex;
+    const snapIsFollowUp = curIsFollowUp;
+    
     try {
         audioChunks = []; mediaRec = new MediaRecorder(micStream);
         mediaRec.ondataavailable = e => audioChunks.push(e.data);
         mediaRec.onstop = async () => {
+          pendingEncodings++;
           const webmBlob = new Blob(audioChunks, {type:'audio/webm'});
           $('vStatus').textContent = 'Converting to MP3...';
           try {
                const mp3Blob = await encodeToMp3(webmBlob);
-               const mKey = `${curRootIndex}_m`;
-               const voiceKey = voiceBlobs[mKey] ? `${curRootIndex}_f` : mKey;
+               // Determine field based on snapshot
+               const voiceKey = snapIsFollowUp ? `${snapRootIdx}_f` : `${snapRootIdx}_m`;
                voiceBlobs[voiceKey] = mp3Blob;
+               
                $('voicePreview').src = URL.createObjectURL(mp3Blob);
                show('voicePlayback');
                $('vStatus').textContent = 'MP3 Ready. #=Confirm';
            } catch(e) {
                console.error("[VOICE] MP3 Conversion failed:", e);
-               const voiceKey = answers[curRootIndex]?.answer === "VOICE" ? `${curRootIndex}_f` : `${curRootIndex}_m`;
+               const voiceKey = snapIsFollowUp ? `${snapRootIdx}_f` : `${snapRootIdx}_m`;
                voiceBlobs[voiceKey] = webmBlob; // Fallback
                $('vStatus').textContent = 'WebM fallback. #=Confirm';
+           } finally {
+               pendingEncodings--;
            }
         };
         mediaRec.start();
@@ -430,6 +456,7 @@ function startActualTest() {
 }
 
 async function finalizeSubmission() {
+  if (!testActive && testDone) return; // Prevent double trigger
   console.log("[SUBMIT] Finalizing quiz...");
   
   testActive = false;
@@ -440,6 +467,21 @@ async function finalizeSubmission() {
     await fetch('/api/mode?m=DONE');
   } catch(e) {}
   
+  // 0. Wait for audio encoding to finish
+  if (pendingEncodings > 0) {
+      const banner = document.createElement('div');
+      banner.id = 'processingBanner';
+      banner.className = 'submit-status-banner info';
+      banner.textContent = "⏳ Processing Audio Recordings... Please Wait";
+      document.body.appendChild(banner);
+      
+      while (pendingEncodings > 0) {
+          console.log("[SUBMIT] Waiting for " + pendingEncodings + " encodings...");
+          await new Promise(r => setTimeout(r, 500));
+      }
+      if ($('processingBanner')) $('processingBanner').remove();
+  }
+
   // 1. Show results locally (preliminary)
   showResults();
 
@@ -453,20 +495,25 @@ async function finalizeSubmission() {
   formData.append('quizId', curQuizId || 'demo_quiz');
   
   // Format answers array EXACTLY as requested: {answer, followUpAnswer}
-  const sortedKeys = Object.keys(answers).sort((a,b) => a-b);
-  const answersList = sortedKeys.map(k => {
+  // We use curTotalCount to ensure the array is complete and in order
+  const answersList = [];
+  for (let i = 0; i < curTotalCount; i++) {
+      const ansObj = answers[i] || { answer: null, followUpAnswer: null };
+      
       // Map "VOICE" placeholder to null string per contract "Voice -> answer = null"
-      const ans = answers[k].answer === "VOICE" ? null : answers[k].answer;
-      // Map follow-up if it's voice or null
-      let fAns = answers[k].followUpAnswer;
-      if (fAns === "VOICE_FOLLOWUP") fAns = null;
-      else if (!fAns) fAns = null;
+      let ans = ansObj.answer === "VOICE" ? null : ansObj.answer;
+      if (!ans && ans !== 0) ans = null;
 
-      return {
+      let fAns = ansObj.followUpAnswer;
+      if (fAns === "VOICE_FOLLOWUP") fAns = null;
+      else if (!fAns && fAns !== 0) fAns = null;
+
+      answersList.push({
           answer: ans,
           followUpAnswer: fAns
-      };
-  });
+      });
+  }
+  
   formData.append('answers', JSON.stringify(answersList));
 
   // Attach audio files with required keys: audio_q{i} and audio_q{i}_f
@@ -575,14 +622,14 @@ function showResults() {
             <div class="res-qtxt">${ans.question}</div>
             
             <div class="res-ans-row">
-                <span class="res-ans-lbl">Answer:</span>
-                <span class="res-ans-val">${ans.type === 'voice' ? 'VOICE' : ans.answer}</span>
+                <span class="res-ans-lbl">Main Answer:</span>
+                <span class="res-ans-val">${ans.answer || (voiceBlobs[`${k}_m`] ? 'Voice Response' : 'N/A')}</span>
             </div>
             
-            ${ans.followUpAnswer && ans.type !== 'voice' ? `
+            ${(ans.followUpAnswer || voiceBlobs[`${k}_f`]) ? `
             <div class="res-ans-row">
-                <span class="res-ans-lbl">Follow-up:</span>
-                <span class="res-ans-val">${ans.followUpAnswer}</span>
+                <span class="res-ans-lbl">Adaptive Follow-up:</span>
+                <span class="res-ans-val">${ans.followUpAnswer === "VOICE_FOLLOWUP" || voiceBlobs[`${k}_f`] ? 'Voice Response' : (ans.followUpAnswer || 'N/A')}</span>
             </div>` : ''}
 
             ${mAudio}

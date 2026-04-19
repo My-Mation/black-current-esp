@@ -150,8 +150,10 @@ void WebServerHandler::_handleApiState() {
     doc["mode"] = modeStr;
     doc["roll"] = gState.studentRoll;
     doc["input"] = gState.numInput;
-    doc["index"] = gState.questionCounter;
+    doc["index"]     = gState.questionCounter;
     doc["rootIndex"] = gState.rootIndex;
+    doc["total"]     = gState.getTotalQuestions();
+    doc["isFollowUp"] = gState.interactions[gState.questionCounter].isFollowUp;
     doc["quizId"] = gState.quizId;
     doc["quizTitle"] = gState.quizTitle;
     

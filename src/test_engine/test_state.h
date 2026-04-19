@@ -82,8 +82,10 @@ public:
 
     // ---- Timer --------------------------------------------
     bool         timerRunning  = false;
-    unsigned long timerStartMs = 0;
-    unsigned int  elapsedSec   = 0;
+    unsigned long timerStartMs = 0; // Current question start
+    unsigned long testStartMs  = 0; // Total test start
+    unsigned int  elapsedSec   = 0; // Dispayed cumulative time
+    unsigned int  qElapsedSec  = 0; // Per-question time (internal)
 
     // ---- Interactions (History) ---------------------------
     QuestionInteraction interactions[100]; // increased for branching paths
@@ -126,6 +128,16 @@ public:
             quizDoc = nullptr;
         }
         for (int i=0; i<100; i++) clearInteraction(i);
+    }
+
+    int getTotalQuestions() {
+        if (!quizDoc) return 0;
+        if (quizDoc->is<JsonArray>()) return quizDoc->as<JsonArray>().size();
+        JsonObject root = quizDoc->as<JsonObject>();
+        if (root.containsKey("questions") && root["questions"].is<JsonArray>()) {
+            return root["questions"].as<JsonArray>().size();
+        }
+        return 0;
     }
 
     void loadQuiz(const String& json) {
@@ -181,8 +193,15 @@ public:
                 currentNode = (*quizDoc)[0];
             }
             applyModeForNode(currentNode, false);
-            numInput = ""; // Clear roll number accumulator for actual questions
-            resetTimer();
+            numInput = ""; 
+            
+            // Start cumulative test timer
+            testStartMs = millis();
+            timerRunning = true;
+            elapsedSec = 0;
+            
+            resetTimer(); // Also start per-question timer
+            Serial.printf("[ENGINE] Started test with rootIndex 0, Mode: %d\n", mode);
         } else {
             mode = MODE_DONE;
         }
@@ -257,8 +276,17 @@ public:
     }
 
     void moveToNextRoot() {
+        JsonArray arr;
         if (quizDoc && quizDoc->is<JsonArray>()) {
-            JsonArray arr = quizDoc->as<JsonArray>();
+            arr = quizDoc->as<JsonArray>();
+        } else if (quizDoc && quizDoc->is<JsonObject>()) {
+            JsonObject root = quizDoc->as<JsonObject>();
+            if (root.containsKey("questions") && root["questions"].is<JsonArray>()) {
+                arr = root["questions"].as<JsonArray>();
+            }
+        }
+
+        if (!arr.isNull()) {
             rootIndex++;
             if (rootIndex < (int)arr.size()) {
                 Serial.printf("[ENGINE] Advancing to root question %d\n", rootIndex);
@@ -344,13 +372,12 @@ public:
     void resetTimer() {
         timerStartMs  = millis();
         timerRunning  = true;
-        elapsedSec    = 0;
         touchStage    = TOUCH_NONE;
     }
 
     void updateTimer() {
         if (!timerRunning) return;
-        unsigned int s = (millis() - timerStartMs) / 1000;
+        unsigned int s = (millis() - testStartMs) / 1000;
         if (s != elapsedSec) elapsedSec = s;
     }
 
