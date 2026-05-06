@@ -107,11 +107,22 @@ document.addEventListener('DOMContentLoaded', () => {
 let micStream = null;
 async function requestMic() {
   if (micStream) return true;
+  if (!window.isSecureContext) {
+    alert("Microphone access REQUIRES a Secure Context.\n\nPlease use 'http://localhost:8000' or enable the '#unsafely-treat-insecure-origin-as-secure' flag in Chrome for this IP.");
+    return false;
+  }
   try {
     micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
     return true;
   } catch (e) {
-    alert("Microphone access required.");
+    if (e.name === 'NotAllowedError') {
+       alert("Microphone PERMISSION DENIED.\n\nIt looks like your browser is blocking the microphone by default. Please click the PADLOCK icon in the address bar (next to the URL) and set Microphone to 'Allow' or 'Ask'.");
+    } else if (e.name === 'NotReadableError' || e.name === 'TrackStartError') {
+       alert("Microphone BUSY.\n\nAnother application or browser tab is currently using the microphone. Please close other recording apps and try again.");
+    } else {
+       alert("Microphone Error: " + e.message);
+    }
+    console.warn("[VOICE] Permission denied or device busy:", e);
     return false;
   }
 }
@@ -143,6 +154,7 @@ function onESPState(d){
   curQuizTitle = d.quizTitle || "";
   curTotalCount = d.total || 0;
   curIsFollowUp = d.isFollowUp || false;
+  let prevRootIdx = curRootIndex;
   curRootIndex = d.rootIndex !== undefined ? d.rootIndex : curRootIndex;
   
   if (curQuizId) {
@@ -155,9 +167,12 @@ function onESPState(d){
 
   // Transition to DONE / Submit
   if(d.mode === 'DONE' && testActive){ 
-      if (curQDoc && curIndex !== -1) {
-          const finalVal = lastInput || d.prevSel || d.prevNum || "";
-          saveCurrentAnswer(espSec, finalVal, curRootIndex);
+      if (curQDoc && curIndex !== -1 && curMode !== 'ROLL') {
+          // Use a stricter fallback to avoid leakage: Prefer ESP prev values, then lastInput
+          const finalVal = (d.prevSel && d.prevSel !== "") ? d.prevSel : 
+                           (d.prevNum && d.prevNum !== "") ? d.prevNum : 
+                           lastInput;
+          saveCurrentAnswer(espSec, finalVal, prevRootIdx);
       }
       finalizeSubmission(); 
       return; 
@@ -175,16 +190,20 @@ function onESPState(d){
     const newText = d.q?.text || d.q?.question || "";
     const oldText = curQDoc?.text || curQDoc?.question || "";
     
-    // Capture input live
-    if(d.input) lastInput = d.input;
-    if(d.sel) lastInput = d.sel;
-    if(d.num) lastInput = d.num;
+    // Capture input live (Question phase only)
+    if(d.mode === 'ROLL') { 
+        lastInput = ""; // Explicitly isolate ROLL input from question answers
+    } else if(d.mode === 'MCQ') { 
+        if(d.sel !== undefined) lastInput = d.sel; 
+    } else if(d.mode === 'NUM' || d.mode === 'NUMERIC') { 
+        if(d.num !== undefined) lastInput = d.num; 
+    }
 
     if(d.index !== curIndex || d.mode !== curMode || (d.q && newText !== oldText)){
-       if (curQDoc && curIndex !== -1) {
+       if (curQDoc && curIndex !== -1 && curMode !== 'ROLL') {
            // Use prev values from ESP if available for perfect sync
            let finalVal = d.prevSel || d.prevNum || lastInput;
-           saveCurrentAnswer(prevEspSec, finalVal, curRootIndex);
+           saveCurrentAnswer(prevEspSec, finalVal, prevRootIdx);
        }
        curIndex = d.index;
        curMode = d.mode;
@@ -217,7 +236,14 @@ function saveCurrentAnswer(sec, val, rootIdx) {
     if (!curQDoc || rootIdx === -1) return;
     const dur = Math.max(sec, Math.floor((Date.now() - localStartTime)/1000));
     const isVoice = (curQDoc.type === 'voice');
-    const answerVal = isVoice ? "VOICE" : (val || 'no answer');
+    let answerVal = isVoice ? "VOICE" : (val || 'no answer');
+    
+    // Safety check against roll number leakage (Case-insensitive check)
+    const rollNum = ($('rollDisp').textContent || '').trim();
+    if (!isVoice && rollNum && val === rollNum && curQDoc.type !== 'numeric') {
+        console.warn("[SYNC] Rejected roll-number leakage for rootIdx:", rootIdx);
+        answerVal = 'no answer';
+    }
     
     if (!answers[rootIdx]) {
         answers[rootIdx] = { 
@@ -347,11 +373,11 @@ function renderTimer(sec){
 async function startRecording(){
     if (!micStream) {
         console.log("[VOICE] Mic stream missing, requesting now...");
-        const ok = await requestMic();
-        if (!ok) {
-            $('vStatus').textContent = 'Microphone access denied';
-            return;
-        }
+         const ok = await requestMic();
+         if (!ok) {
+             $('vStatus').innerHTML = 'Microphone access denied. <button class="btn btn-ok btn-sm" onclick="requestMic().then(ok => { if(ok) startRecording(); })">Allow Mic</button>';
+             return;
+         }
     }
     
     // Snapshot the current question indexing to prevent race conditions during async encoding
